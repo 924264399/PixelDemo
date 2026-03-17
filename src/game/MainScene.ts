@@ -21,7 +21,7 @@ export class MainScene extends Phaser.Scene {
     // 屋顶系统 - 使用像素检测方案（你的建议）
     private roofSprites: Map<string, Phaser.GameObjects.TileSprite> = new Map();
     private roofCanvases: Map<string, {canvas: HTMLCanvasElement, context: CanvasRenderingContext2D}> = new Map();
-    private roofAlphaSpeed = 0.1; // 增加速度，更快的透明度变化
+    private roofAlphaSpeed = 0.05; // 渐变速度，约3-4帧完成过渡
     private currentRoofAlphas: Map<string, number> = new Map();
     private targetRoofAlphas: Map<string, number> = new Map();
 
@@ -233,13 +233,13 @@ export class MainScene extends Phaser.Scene {
         // 获取单个像素的RGBA数据
         try {
             const pixelData = roofData.context.getImageData(x, y, 1, 1).data;
+            const r = pixelData[0];
+            const g = pixelData[1];
+            const b = pixelData[2];
             const alpha = pixelData[3];
-            // 调试输出
-            if (alpha > 0) {
-                console.log(`DEBUG: ${roofKey} has roof at (${x}, ${y}), alpha=${alpha}`);
-            }
-            // 检查alpha通道是否大于0（有像素）
-            return alpha > 0; // alpha > 0
+
+            // 检查是否有实际像素（RGB总和 > 0 或 alpha > 0）
+            return (r + g + b) > 0 || alpha > 0;
         } catch (e) {
             console.warn('Failed to get pixel data at', x, y, roofKey);
             return false;
@@ -250,24 +250,44 @@ export class MainScene extends Phaser.Scene {
         // 获取玩家当前位置（整数坐标）
         const playerX = Math.floor(this.player.x);
         const playerY = Math.floor(this.player.y);
-
         const roofKeys = ['roof_home', 'roof_cafe', 'roof_store'];
 
-        // 先重置所有屋顶为不透明
+        // 调试输出 - 显示玩家位置
+        console.log(`Player position: (${playerX}, ${playerY})`);
+
+        // 更新目标透明度 - 不直接设置sprite的alpha
         roofKeys.forEach(key => {
-            const roofSprite = this.roofSprites.get(key);
-            if (roofSprite) {
-                roofSprite.setAlpha(1.0);
-            }
+            const hasRoof = this.hasRoofPixelAt(playerX, playerY, key);
+            this.targetRoofAlphas.set(key, hasRoof ? 0.0 : 1.0);
+
+            // 调试输出 - 显示每个屋顶的检测结果
+            console.log(`${key}: hasRoof=${hasRoof}, targetAlpha=${hasRoof ? 0.0 : 1.0}`);
         });
 
-        // 检查玩家当前位置是否有任何屋顶像素
+        // 统一进行平滑过渡
         roofKeys.forEach(key => {
-            if (this.hasRoofPixelAt(playerX, playerY, key)) {
-                const roofSprite = this.roofSprites.get(key);
-                if (roofSprite) {
-                    roofSprite.setAlpha(0.0); // 直接设置透明
-                }
+            const current = this.currentRoofAlphas.get(key) ?? 1.0;
+            const target = this.targetRoofAlphas.get(key) ?? 1.0;
+            const roofSprite = this.roofSprites.get(key);
+
+            // 调试输出 - 显示实际的target值
+            console.log(`${key}: ACTUAL target from map = ${this.targetRoofAlphas.get(key)}`);
+
+            if (!roofSprite) return;
+
+            if (Math.abs(current - target) > 0.01) {
+                // 进行插值计算
+                const newAlpha = current + (target - current) * this.roofAlphaSpeed;
+                this.currentRoofAlphas.set(key, newAlpha);
+                roofSprite.setAlpha(newAlpha);
+
+                // 调试输出 - 显示渐变过程
+                console.log(`${key}: current=${current.toFixed(2)}, target=${target.toFixed(2)}, new=${newAlpha.toFixed(2)}`);
+            } else {
+                // 精确收敛到目标值
+                this.currentRoofAlphas.set(key, target);
+                roofSprite.setAlpha(target);
+                console.log(`${key}: converged to ${target.toFixed(2)}`);
             }
         });
     }
