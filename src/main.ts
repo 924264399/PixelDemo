@@ -37,3 +37,5 @@ const game = new Phaser.Game(config);
 window.addEventListener('resize', () => {
     game.scale.resize(window.innerWidth, window.innerHeight);
 });
+
+console.log('游戏初始化完成');
