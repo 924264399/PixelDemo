@@ -361,3 +361,39 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# 请确保将 .env 文件添加到 .gitignore 中
+# 这样敏感信息就不会被上传到Git仓库
+
+# 依赖文件
+node_modules/
+dist/
+build/
+
+# 环境变量（重要！）
+.env
+.env.local
+.env.production
+
+# 日志文件
+*.log
+logs/
+
+# 调试文件
+.vscode/
+.idea/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+
+# 测试覆盖率
+coverage/
+
+# 打包文件
+*.tgz
+*.tar.gz

@@ -4,10 +4,12 @@ import { PathPlanner, Waypoint } from './PathPlanner';
 import { CafeWorkerAgent, NPCPersonality } from './AIAgent';
 import { SmartNPC, SceneManager } from './SmartNPC';
 import { TimeManager } from './TimeManager';
+import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 
 export class MainScene extends Phaser.Scene {
     private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
     private npc!: NPC; // 单个NPC实例
+    private policeSystem!: PoliceNPCIntegration; // 警察NPC系统
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
     private background!: Phaser.GameObjects.TileSprite;
 
@@ -28,8 +30,14 @@ export class MainScene extends Phaser.Scene {
     private eKey!: Phaser.Input.Keyboard.Key;
     private enterKey!: Phaser.Input.Keyboard.Key;
     private hiddenInput!: HTMLInputElement;
-    private chatHistory: string[] = []; // 聊天记录
-    private maxChatLines = 8; // 最大显示行数
+    private chatHistory: string[] = []; // 完整聊天记录（不截断）
+    private chatScrollOffset = 0;        // 按「视觉行」偏移，0=最新
+    private chatWrapWidth = 520;         // wordWrap宽度（像素），初始化后更新
+    private readonly CHAT_FONT_SIZE = 14;
+    private readonly CHAT_LINE_HEIGHT = 20;
+    private readonly CHAT_VISIBLE_LINES = 9;
+    // 用于像素级文字测量的离屏 Canvas
+    private _measureCtx: CanvasRenderingContext2D | null = null;
 
     // 遮罩相关
     private collisionMaskCanvas!: HTMLCanvasElement;
@@ -116,6 +124,13 @@ export class MainScene extends Phaser.Scene {
         // 设置键盘事件
         this.eKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
         this.enterKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
+        
+        // 🚀 初始化警察NPC系统
+        try {
+            this.initPoliceSystem();
+        } catch (error) {
+            console.error('警察系统初始化失败，但游戏继续运行:', error);
+        }
     }
 
     private createNPC() {
@@ -243,6 +258,67 @@ export class MainScene extends Phaser.Scene {
             }
         });
     }
+    
+    /**
+     * � 增强调试的警察NPC系统初始化
+     */
+    private async initPoliceSystem(): Promise<void> {
+        try {
+            console.log('🏛️ 开始初始化警察NPC系统...');
+            
+            // 创建警察NPC集成系统
+            this.policeSystem = new PoliceNPCIntegration(this);
+            console.log('📦 PoliceNPCIntegration 创建完成');
+            
+            const success = await this.policeSystem.initialize();
+            console.log(`🔍 初始化结果: ${success ? '成功' : '失败'}`);
+            
+            if (success) {
+                console.log('✅ 警察NPC系统初始化成功！');
+                
+                // 设置警察NPC的碰撞检测
+                const policeNPC = this.policeSystem.getPoliceNPC();
+                console.log('🔍 获取到的警察NPC:', policeNPC ? '存在' : '不存在');
+                
+                if (policeNPC && typeof policeNPC.setCollisionChecker === 'function') {
+                    policeNPC.setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
+                    console.log('✅ 碰撞检测设置完成');
+                }
+                
+                // 显示系统状态
+                const status = this.policeSystem.getPoliceStatus();
+                if (status) {
+                    console.log(`👮‍♂️ ${status.name}已上岗:`, status);
+                } else {
+                    console.warn('⚠️  无法获取警察状态');
+                }
+                
+            } else {
+                console.warn('⚠️  警察NPC系统初始化失败，但不影响游戏运行');
+            }
+        } catch (error) {
+            console.error('❌ 警察NPC系统初始化出错:', error);
+            console.error('详细错误:', error.stack);
+        }
+    }
+    
+    /**
+     * 🚀 处理与警察对话 - 返回回复内容而不是直接显示
+     */
+    private async handlePoliceDialog(playerMessage: string): Promise<string> {
+        if (!this.policeSystem) {
+            return '警察NPC系统未初始化';
+        }
+
+        try {
+            const response = await this.policeSystem.handlePlayerDialog(playerMessage);
+            console.log(`👮‍♂️ 老刘回复: ${response}`);
+            return response;
+        } catch (error) {
+            console.error('对话处理失败:', error);
+            return '抱歉，我现在有点忙，稍后再聊。';
+        }
+    }
 
     private initMasks() {
         // 创建碰撞遮罩canvas
@@ -362,6 +438,15 @@ export class MainScene extends Phaser.Scene {
 
         // 更新NPC（关键修复：确保NPC能够移动）
         this.npc.update();
+        
+        // 🚀 更新警察NPC系统
+        try {
+            if (this.policeSystem) {
+                this.policeSystem.update();
+            }
+        } catch (error) {
+            // 静默处理错误，不影响游戏主循环
+        }
 
         // 使用像素检测方案更新屋顶透明度
         this.updateRoofTransparencyByPixelDetection();
@@ -470,7 +555,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     /**
-     * 动态图层排序 - 基于Y坐标的深度排序
+     * � 恢复被意外删除的深度排序方法
      */
     private updateDepthSorting(): void {
         // 获取玩家和NPC的Y坐标
@@ -489,8 +574,15 @@ export class MainScene extends Phaser.Scene {
         if ((this.npc as SmartNPC).speechBubble) {
             // 气泡深度比NPC高1000
             const bubbleDepth = baseNPCDepth + Math.floor(npcY) + 1000;
-            // 这里我们无法直接设置气泡深度，因为它在SmartNPC类内部管理
             // 气泡系统已经设置了足够高的深度(2000+)
+        }
+        
+        // 处理警察NPC的深度排序
+        if (this.policeSystem) {
+            const policeNPC = this.policeSystem.getPoliceNPC();
+            if (policeNPC) {
+                policeNPC.setDepth(baseNPCDepth + Math.floor(policeNPC.y));
+            }
         }
     }
 
@@ -501,9 +593,9 @@ export class MainScene extends Phaser.Scene {
         const screenWidth = window.innerWidth;
         const screenHeight = window.innerHeight;
 
-        // 对话框尺寸调整：宽度缩小一半，高度增加一倍
-        const dialogWidth = (screenWidth - 100) / 2; // 宽度缩小一半
-        const dialogHeight = 300; // 高度增加一倍（原来150）
+        // 对话框尺寸调整：恢复合理尺寸
+        const dialogWidth = Math.min(600, screenWidth - 100); // 适中的宽度
+        const dialogHeight = 320; // 适中的高度，足够显示对话
         const dialogX = screenWidth / 2 - dialogWidth / 2; // 居中显示
         const dialogY = screenHeight - dialogHeight - 50; // 底部留50px边距
 
@@ -526,7 +618,7 @@ export class MainScene extends Phaser.Scene {
         this.dialogBox.fillStyle(0xA0522D, 0.9); // 浅棕色
         this.dialogBox.fillRoundedRect(dialogX + 4, dialogY + 4, dialogWidth - 8, 20, 4);
         
-        // 文字区域背景（浅米色，半透明）- 为更大字体预留更多空间
+        // 文字区域背景（浅米色，半透明）- 适中空间
         this.dialogBox.fillStyle(0xF5DEB3, 0.3); // 浅米色
         this.dialogBox.fillRoundedRect(dialogX + 8, dialogY + 35, dialogWidth - 16, dialogHeight - 85, 4);
         
@@ -544,25 +636,31 @@ export class MainScene extends Phaser.Scene {
         // this.dialogBg.setOrigin(0, 0);
         // this.dialogBg.setDisplaySize(dialogWidth, dialogHeight);
 
-        // 解决方案：文字放回对话框内，但确保在背景之上
+        // 🔧 文本显示区域 - 限制高度避免遮挡输入框
         const textAreaX = dialogX + 20;
-        const textAreaY = dialogY + 20; // 重新放回对话框内
+        const textAreaY = dialogY + 20;
         const textAreaWidth = dialogWidth - 40;
+        const textAreaHeight = dialogHeight - 110; // 🔧 为输入框预留空间
         
-        this.dialogText = this.add.text(textAreaX, textAreaY + 15, '', { // 向下移动15像素避开顶部边框
-            fontSize: '18px', // 增加字体大小
-            fontStyle: 'bold', // 加粗
-            color: '#2F1B14', // 深棕色文字，在米色背景上清晰可见
-            wordWrap: { width: textAreaWidth },
-            lineSpacing: 8, // 增加行间距
-            padding: { x: 8, y: 8 }
+        this.dialogText = this.add.text(textAreaX, textAreaY + 15, '', {
+            fontSize: `${this.CHAT_FONT_SIZE}px`,
+            fontFamily: 'sans-serif',   // 与 measureText 使用同一字体，确保折行一致
+            fontStyle: 'normal',
+            color: '#2F1B14',
+            // ⚠️ 不用 wordWrap：折行由 buildVisualLines 精确控制，直接传 \n 连接的行
+            lineSpacing: 2,
+            padding: { x: 4, y: 2 },
+            align: 'left',
+            fixedWidth: textAreaWidth,
+            fixedHeight: textAreaHeight,
+            maxLines: this.CHAT_VISIBLE_LINES + 2
         });
 
-        // 输入框背景 - 简化设计避免遮挡
+        // 输入框背景 - 适应调整后的对话框高度
         const inputBoxX = dialogX + 15;
-        const inputBoxY = dialogY + dialogHeight - 45;
+        const inputBoxY = dialogY + dialogHeight - 45; // 合适的位置
         const inputBoxWidth = dialogWidth - 30;
-        const inputBoxHeight = 30;
+        const inputBoxHeight = 30; // 标准高度
         
         this.dialogInputBox = this.add.graphics();
         // 木头风格输入框
@@ -630,8 +728,27 @@ export class MainScene extends Phaser.Scene {
             }
         });
 
+        // 记录真实 wrapWidth，供分页计算使用
+        this.chatWrapWidth = textAreaWidth - 20;
+
         // 创建隐藏的输入框来支持中文输入
         this.createHiddenInputForChinese();
+        
+        // 注册鼠标滚轮事件，按「视觉行」滚动
+        this.input.on('wheel', (_pointer: any, _gameObjects: any, _deltaX: number, deltaY: number) => {
+            if (!this.isInDialogMode) return;
+            
+            const allLines = this.buildVisualLines();
+            const maxOffset = Math.max(0, allLines.length - this.CHAT_VISIBLE_LINES);
+            if (deltaY < 0) {
+                // 向上滚：看更早的内容
+                this.chatScrollOffset = Math.min(this.chatScrollOffset + 2, maxOffset);
+            } else {
+                // 向下滚：回到最新
+                this.chatScrollOffset = Math.max(this.chatScrollOffset - 2, 0);
+            }
+            this.updateChatDisplay();
+        });
     }
 
     /**
@@ -639,33 +756,42 @@ export class MainScene extends Phaser.Scene {
      */
     private updateDialogSystem(): void {
         if (!this.isInDialogMode) {
-            // 检查玩家是否靠近NPC
-            const distance = Phaser.Math.Distance.Between(
+            // 检查玩家是否靠近原NPC
+            const distanceToNPC = Phaser.Math.Distance.Between(
                 this.player.x, this.player.y,
                 this.npc.x, this.npc.y
             );
-
-            const isNear = distance < 80; // 80像素范围内
-
-            if (isNear && !this.isNearNPC) {
-                // 刚接近NPC
-                this.isNearNPC = true;
-                // 不再显示交互提示
-                // this.showInteractionPrompt();
-            } else if (!isNear && this.isNearNPC) {
-                // 离开NPC
-                this.isNearNPC = false;
-                // this.hideInteractionPrompt();
+            
+            // 🚀 检查玩家是否靠近警察NPC
+            let distanceToPolice = Infinity;
+            const policeNPC = this.policeSystem?.getPoliceNPC();
+            if (policeNPC) {
+                distanceToPolice = Phaser.Math.Distance.Between(
+                    this.player.x, this.player.y,
+                    policeNPC.x, policeNPC.y
+                );
             }
 
-            // 取消提示位置更新
-            // if (this.isNearNPC && this.promptText.visible) {
-            //     this.promptText.setPosition(this.npc.x, this.npc.y - 100);
-            // }
+            const isNearNPC = distanceToNPC < 80; // 80像素范围内
+            const isNearPolice = distanceToPolice < 80; // 80像素范围内
+            const isNear = isNearNPC || isNearPolice;
+
+            if (isNear && !this.isNearNPC) {
+                // 刚接近任一NPC
+                this.isNearNPC = true;
+            } else if (!isNear && this.isNearNPC) {
+                // 离开所有NPC
+                this.isNearNPC = false;
+            }
 
             // 检查是否按下E键
             if (this.isNearNPC && Phaser.Input.Keyboard.JustDown(this.eKey)) {
-                this.startDialog();
+                // 判断与哪个NPC对话
+                if (isNearPolice && distanceToPolice <= distanceToNPC) {
+                    this.startDialog('police'); // 🚀 与警察对话
+                } else if (isNearNPC) {
+                    this.startDialog('npc'); // 与原NPC对话
+                }
             }
         } else {
             // 在对话模式中，检查ESC键退出
@@ -693,10 +819,19 @@ export class MainScene extends Phaser.Scene {
     }
 
     /**
-     * 开始对话
+     * 🚀 开始对话 - 支持不同NPC类型
      */
-    private startDialog(): void {
-        console.log('💬 开始与NPC对话');
+    private currentDialogNPC: 'npc' | 'police' | null = null;
+    
+    private startDialog(npcType: 'npc' | 'police' = 'npc'): void {
+        this.currentDialogNPC = npcType;
+        
+        if (npcType === 'police') {
+            console.log('�‍♂️ 开始与警察老刘对话');
+        } else {
+            console.log('�💬 开始与NPC对话');
+        }
+        
         this.isInDialogMode = true;
         
         // 独立显示每个元素
@@ -706,12 +841,17 @@ export class MainScene extends Phaser.Scene {
         this.dialogInput.setVisible(true);
         this.escHintText.setVisible(true);
         
-        // 不需要隐藏交互提示，因为已经不显示了
-        // this.hideInteractionPrompt();
-        
-        // 初始化聊天记录
+        // 初始化聊天记录，并重置滚动到最底部
         this.chatHistory = [];
-        this.addChatMessage(`${this.npc.getName()}: 你好！有什么可以帮助你的吗？`);
+        this.chatScrollOffset = 0;
+        
+        if (npcType === 'police') {
+            // 🚀 警察的初始对话
+            this.addChatMessage('民警老刘', '哎，李家妹子，咋地了？\n有事儿说话！');
+        } else {
+            // 原NPC的初始对话
+            this.addChatMessage(this.npc.getName(), '你好！有什么可以帮助你的吗？');
+        }
         
         // 重置输入
         this.currentInputText = '';
@@ -722,7 +862,10 @@ export class MainScene extends Phaser.Scene {
         this.hiddenInput.focus();
         
         // 设置NPC为对话状态
-        this.npc.setTalking();
+        if (npcType === 'npc') {
+            this.npc.setTalking();
+        }
+        // 警察NPC的状态由PoliceOfficerNPC内部管理
     }
 
     /**
@@ -761,24 +904,61 @@ export class MainScene extends Phaser.Scene {
     }
 
     /**
-     * 发送消息给NPC
+     * 🚀 发送消息给NPC - 支持不同NPC类型
      */
-    private sendMessage(message: string): void {
+    private async sendMessage(message: string): Promise<void> {
         console.log(`📤 玩家: ${message}`);
         
         // 立即添加玩家消息到聊天记录
-        this.addChatMessage(`玩家: ${message}`);
+        this.addChatMessage('你', message);
         
-        // NPC延迟1秒后回复，模拟真实对话
-        this.time.delayedCall(1000, () => {
-            this.addChatMessage(`${this.npc.getName()}: 阿巴阿巴`);
-        });
+        if (this.currentDialogNPC === 'police') {
+            // 🚀 与警察对话 - 使用AI
+            // 先显示"思考中..."占位消息
+            this.addChatMessage('民警老刘', '（思考中...）');
+            
+            try {
+                const response = await this.handlePoliceDialog(message);
+                // 替换掉"思考中..."消息（移除最后一条老刘消息，再添加真实回复）
+                this.replaceLastMessage('民警老刘', response);
+            } catch (error) {
+                console.error('警察AI对话失败:', error);
+                this.replaceLastMessage('民警老刘', '得了，我这儿有点事儿。\n回头再唠！');
+            }
+        } else {
+            // 原NPC对话 - 保持原有逻辑
+            this.time.delayedCall(1000, () => {
+                this.addChatMessage(this.npc.getName(), '阿巴阿巴');
+            });
+        }
+    }
+
+    /**
+     * 替换聊天记录中最后一条指定说话者的消息
+     */
+    private replaceLastMessage(speaker: string, newContent: string): void {
+        // 空内容保护 + 换行符统一处理（和 addChatMessage 保持一致）
+        const safeContent = (newContent && newContent.trim()) 
+            ? newContent.replace(/\r?\n/g, ' ').trim()
+            : '...（无回复）';
         
-        // 这里可以接入大模型处理
-        // this.time.delayedCall(1000, async () => {
-        //     const response = await this.processNPCResponse(message);
-        //     this.addChatMessage(`${this.npc.getName()}: ${response}`);
-        // });
+        // 找到最后一条该说话者的消息并替换
+        for (let i = this.chatHistory.length - 1; i >= 0; i--) {
+            if (this.chatHistory[i].startsWith(`${speaker}: `)) {
+                this.chatHistory[i] = `${speaker}: ${safeContent}`;
+                this.updateDialogText();
+                return;
+            }
+        }
+        // 如果没找到则直接添加
+        this.addChatMessage(speaker, safeContent);
+    }
+
+    /**
+     * 更新对话文本显示（替换消息后调用）
+     */
+    private updateDialogText(): void {
+        this.updateChatDisplay();
     }
 
     /**
@@ -814,7 +994,7 @@ export class MainScene extends Phaser.Scene {
                 if (event.key === 'Enter') {
                     event.preventDefault();
                     if (this.currentInputText.trim()) {
-                        this.sendMessage(this.currentInputText);
+                        this.sendMessage(this.currentInputText); // async调用，不需要await
                         this.currentInputText = '';
                         this.hiddenInput.value = '';
                         this.dialogInput.setText('');
@@ -828,30 +1008,102 @@ export class MainScene extends Phaser.Scene {
     }
     
     /**
-     * 添加聊天消息并更新显示
+     * � 添加聊天消息并更新显示 - 让Phaser自动换行
      */
-    private addChatMessage(message: string): void {
-        // 添加消息到聊天记录
-        this.chatHistory.push(message);
-        
-        // 如果超过最大行数，删除最早的消息（滚动效果）
-        if (this.chatHistory.length > this.maxChatLines) {
-            this.chatHistory.shift();
+    private addChatMessage(sender: string, message?: string): void {
+        let content: string;
+        if (message) {
+            // 把消息内所有换行符替换成空格，统一由 wordWrap 处理折行
+            content = message.replace(/\r?\n/g, ' ').trim();
+            this.chatHistory.push(`${sender}: ${content}`);
+        } else {
+            this.chatHistory.push(sender);
         }
-        
-        // 更新显示
+        // 新消息到达，自动跳到最底部
+        this.chatScrollOffset = 0;
         this.updateChatDisplay();
     }
 
     /**
-     * 更新聊天显示
+     * 获取测量用 Canvas Context（懒初始化）
+     */
+    private getMeasureCtx(): CanvasRenderingContext2D {
+        if (!this._measureCtx) {
+            const canvas = document.createElement('canvas');
+            this._measureCtx = canvas.getContext('2d')!;
+        }
+        this._measureCtx.font = `${this.CHAT_FONT_SIZE}px sans-serif`;
+        return this._measureCtx;
+    }
+
+    /**
+     * 用 Canvas measureText 精确折行，返回该条消息折成的视觉行数组
+     */
+    private wrapTextToLines(text: string): string[] {
+        const ctx = this.getMeasureCtx();
+        const maxWidth = this.chatWrapWidth;
+        const result: string[] = [];
+        let line = '';
+
+        for (const char of text) {
+            const testLine = line + char;
+            if (ctx.measureText(testLine).width > maxWidth && line.length > 0) {
+                result.push(line);
+                line = char;
+            } else {
+                line = testLine;
+            }
+        }
+        if (line) result.push(line);
+        return result.length > 0 ? result : [''];
+    }
+
+    /**
+     * 把所有历史消息精确拆成视觉行，消息间插入空行分隔
+     */
+    private buildVisualLines(): string[] {
+        const lines: string[] = [];
+        for (let i = 0; i < this.chatHistory.length; i++) {
+            const msgLines = this.wrapTextToLines(this.chatHistory[i]);
+            lines.push(...msgLines);
+            // 消息之间加空行（最后一条不加）
+            if (i < this.chatHistory.length - 1) {
+                lines.push('');
+            }
+        }
+        return lines;
+    }
+
+    /**
+     * 更新聊天显示 - 按「视觉行」截取并渲染
      */
     private updateChatDisplay(): void {
-        // 将聊天记录合并为一个字符串，每行之间用换行符分隔
-        const chatText = this.chatHistory.join('\n');
-        this.dialogText.setText(chatText);
-        
-        // 添加滚动到底部的效果（可选）
-        console.log(`💬 聊天记录更新，当前${this.chatHistory.length}行`);
+        const allLines = this.buildVisualLines();
+        const total = allLines.length;
+        const visible = this.CHAT_VISIBLE_LINES;
+
+        // offset=0 显示最后 visible 行；offset 越大越往上翻
+        const endIdx = Math.max(total - this.chatScrollOffset, 0);
+        const startIdx = Math.max(endIdx - visible, 0);
+        const slice = allLines.slice(startIdx, endIdx);
+
+        this.dialogText.setText(slice.join('\n'));
+
+        // 更新滚动提示
+        const canScrollUp = startIdx > 0;
+        const canScrollDown = this.chatScrollOffset > 0;
+        this.updateScrollHint(canScrollUp, canScrollDown);
+    }
+
+    /**
+     * 更新滚动提示文字
+     */
+    private updateScrollHint(canScrollUp: boolean, canScrollDown: boolean): void {
+        if (!this.escHintText) return;
+        let hint = '按esc退出';
+        if (canScrollUp || canScrollDown) {
+            hint = '↑↓滚轮翻页  ' + hint;
+        }
+        this.escHintText.setText(hint);
     }
 }
