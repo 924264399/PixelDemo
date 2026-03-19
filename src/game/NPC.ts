@@ -98,6 +98,9 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
     setTarget(x: number, y: number) {
         this.targetPosition = { x, y };
         this.currentState = NPCState.MOVING;
+        this.stuckCounter = 0; // 重置卡住计数器
+        this.avoidanceDirection = null;
+        this.avoidanceFrames = 0;
     }
 
     /**
@@ -162,8 +165,8 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
         const dy = this.targetPosition.y - this.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        // 到达目标（阈值5像素）
-        if (distance < 5) {
+        // 到达目标（阈值20像素，避免因目标在障碍物边缘导致反复抽搐）
+        if (distance < 20) {
             this.stop();
             return;
         }
@@ -294,23 +297,28 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
     
     /**
      * 强制脱困 - 回退到安全位置
+     * 如果 8 个方向全被堵死，放弃当前目标回到 IDLE，由上层逻辑重新选路
      */
     private forceEscape(): void {
         const escapeDirections = [
             { x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 },
             { x: -1, y: -1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: 1, y: 1 }
         ];
-        
+
         for (const dir of escapeDirections) {
-            const escapeX = this.x + dir.x * 20; // 后退20像素
+            const escapeX = this.x + dir.x * 20;
             const escapeY = this.y + dir.y * 20;
-            
+
             if (!this.checkCollision(escapeX, escapeY)) {
                 console.log(`NPC ${this.npcName} 脱困到: (${escapeX}, ${escapeY})`);
                 this.setPosition(escapeX, escapeY);
-                break;
+                return;
             }
         }
+
+        // 8 个方向全堵死 → 放弃目标，回到 IDLE，让上层巡逻逻辑重新选路
+        console.warn(`NPC ${this.npcName} 完全卡死，放弃目标回到 IDLE`);
+        this.stop(); // targetPosition = null，state = IDLE
     }
 
     /**
@@ -320,12 +328,4 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
         return this.collisionChecker ? this.collisionChecker(x, y) : false;
     }
 
-    /**
-     * 重置卡住计数器
-     */
-    setTarget(x: number, y: number) {
-        this.targetPosition = { x, y };
-        this.currentState = NPCState.MOVING;
-        this.stuckCounter = 0; // 重置卡住计数器
-    }
 }

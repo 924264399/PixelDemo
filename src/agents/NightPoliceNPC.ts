@@ -156,6 +156,16 @@ export class NightPoliceNPC {
         return responses[Math.floor(Math.random() * responses.length)];
     }
 
+    /** 对话开始：暂停巡逻 */
+    pausePatrol(): void {
+        this.npc.setTalking();
+    }
+
+    /** 对话结束：恢复巡逻 */
+    resumePatrol(): void {
+        this.npc.setIdle();
+    }
+
     getStatus() {
         return {
             name: '老王',

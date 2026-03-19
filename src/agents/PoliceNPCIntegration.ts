@@ -16,10 +16,12 @@ import { AIServiceManager } from '../utils/AIService';
 export class PoliceNPCIntegration {
     private policeOfficer: SimplePoliceNPC | null = null;
     private scene: Phaser.Scene;
+    private timeManager: any;
     private isInitialized = false;
 
-    constructor(scene: Phaser.Scene) {
+    constructor(scene: Phaser.Scene, timeManager: any) {
         this.scene = scene;
+        this.timeManager = timeManager;
     }
 
     /**
@@ -28,17 +30,8 @@ export class PoliceNPCIntegration {
     async initialize(): Promise<boolean> {
         try {
             console.log('🏛️ 初始化警察NPC系统...');
-            
-            // 🔧 不在初始化时做健康检查（避免浪费请求额度）
-            // 直接创建警察NPC
-            this.policeOfficer = new SimplePoliceNPC(this.scene);
-
-            // 3. 设置碰撞检测（如果MainScene有碰撞检测函数）
-            if (this.scene && (this.scene as any).checkCollision) {
-                this.policeOfficer.getNPC().setCollisionChecker(
-                    (this.scene as any).checkCollision.bind(this.scene)
-                );
-            }
+            this.policeOfficer = new SimplePoliceNPC(this.scene, this.timeManager);
+            // 碰撞检测由 MainScene.ts 在 initialize() 返回后统一注入
 
             this.isInitialized = true;
             console.log('✅ 警察NPC系统初始化完成，老刘已上岗！');
@@ -104,6 +97,13 @@ export class PoliceNPCIntegration {
      */
     getPoliceNPC() {
         return this.policeOfficer?.getNPC() || null;
+    }
+
+    /**
+     * 获取老刘本体（用于暂停/恢复巡逻）
+     */
+    getPoliceOfficer() {
+        return this.policeOfficer;
     }
 }
 

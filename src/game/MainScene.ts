@@ -277,7 +277,7 @@ export class MainScene extends Phaser.Scene {
             console.log('🏛️ 开始初始化警察NPC系统...');
             
             // 创建警察NPC集成系统
-            this.policeSystem = new PoliceNPCIntegration(this);
+            this.policeSystem = new PoliceNPCIntegration(this, this.timeManager);
             console.log('📦 PoliceNPCIntegration 创建完成');
             
             const success = await this.policeSystem.initialize();
@@ -446,16 +446,27 @@ export class MainScene extends Phaser.Scene {
             this.player.setVelocityY(0);
         }
 
-        // 更新NPC（关键修复：确保NPC能够移动）
+        // 更新咖啡店员物理移动
         this.npc.update();
-        
-        // 🚀 更新警察NPC系统
+
+        // 更新老刘：状态机 + 物理移动
         try {
             if (this.policeSystem) {
                 this.policeSystem.update();
+                this.policeSystem.getPoliceNPC()?.update(); // ← 物理移动帧
             }
         } catch (error) {
-            // 静默处理错误，不影响游戏主循环
+            // 静默处理，不影响主循环
+        }
+
+        // 更新老王：状态机 + 物理移动
+        try {
+            if (this.nightPolice) {
+                this.nightPolice.update();
+                this.nightPolice.getNPC().update(); // ← 物理移动帧
+            }
+        } catch (error) {
+            // 静默处理
         }
 
         // 使用像素检测方案更新屋顶透明度
@@ -490,8 +501,10 @@ export class MainScene extends Phaser.Scene {
         const g = this.collisionMaskImageData.data[pixelIndex + 1];
         const b = this.collisionMaskImageData.data[pixelIndex + 2];
 
-        // 白色表示碰撞体（r+g+b > 阈值）
-        return (r + g + b) > 500; // 白色阈值
+        // 白色表示碰撞体
+        // 阈值设为 630（单通道均值约 210），过滤掉 0.98 灰度等抗锯齿像素
+        // 只有接近纯白（255,255,255）的像素才判定为碰撞
+        return (r + g + b) > 630;
     }
 
     private hasRoofPixelAt(x: number, y: number, roofKey: string): boolean {
@@ -858,12 +871,14 @@ export class MainScene extends Phaser.Scene {
         
         if (npcType === 'police') {
             console.log('👮‍♂️ 开始与老刘对话');
+            this.policeSystem?.getPoliceOfficer()?.pausePatrol();
         } else if (npcType === 'wang') {
             console.log('🌙 开始与老王对话');
+            this.nightPolice?.pausePatrol();
         } else {
-            console.log('� 开始与NPC对话');
+            console.log('💬 开始与NPC对话');
         }
-        
+
         this.isInDialogMode = true;
         
         // 独立显示每个元素
@@ -922,6 +937,14 @@ export class MainScene extends Phaser.Scene {
         
         // 恢复NPC状态
         this.npc.setIdle();
+
+        // 恢复警察巡逻
+        if (this.currentDialogNPC === 'police') {
+            this.policeSystem?.getPoliceOfficer()?.resumePatrol();
+        } else if (this.currentDialogNPC === 'wang') {
+            this.nightPolice?.resumePatrol();
+        }
+        this.currentDialogNPC = null;
     }
 
     /**
