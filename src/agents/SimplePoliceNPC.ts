@@ -25,7 +25,7 @@ export class SimplePoliceNPC {
                 startX: 900,
                 startY: 1400,
                 speed: 80,
-                texture: 'npc1'
+                texture: 'npc_police1'
             };
 
             this.npc = new NPC(scene, npcConfig);

@@ -5,11 +5,13 @@ import { CafeWorkerAgent, NPCPersonality } from './AIAgent';
 import { SmartNPC, SceneManager } from './SmartNPC';
 import { TimeManager } from './TimeManager';
 import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
+import { NightPoliceNPC } from '../agents/NightPoliceNPC';
 
 export class MainScene extends Phaser.Scene {
     private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
     private npc!: NPC; // 单个NPC实例
-    private policeSystem!: PoliceNPCIntegration; // 警察NPC系统
+    private policeSystem!: PoliceNPCIntegration; // 白班警察老刘
+    private nightPolice!: NightPoliceNPC;         // 夜班警察老王
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
     private background!: Phaser.GameObjects.TileSprite;
 
@@ -70,13 +72,14 @@ export class MainScene extends Phaser.Scene {
     preload() {
         // 加载背景图、玩家角色、屋顶图和遮罩图
         this.load.image('background', 'assets/scene.png');
-        this.load.image('player', 'assets/player.png');
+        this.load.image('player', 'assets/sprites/player.png');
         this.load.image('roof_home', 'assets/roof_home.png');
         this.load.image('roof_store', 'assets/roof_store.png');
         this.load.image('roof_cafe', 'assets/roof_cafe.png');
         this.load.image('collision_mask', 'assets/collision_mask.png');
         this.load.image('indoor_outdoor_mask', 'assets/indoor_outdoor_mask.png');
-        this.load.image('npc1', 'assets/npc1.png');
+        this.load.image('npc_police1', 'assets/sprites/npc_police1.png');
+        this.load.image('npc_police2', 'assets/sprites/npc_police2.png');
     }
 
     create() {
@@ -131,6 +134,13 @@ export class MainScene extends Phaser.Scene {
         } catch (error) {
             console.error('警察系统初始化失败，但游戏继续运行:', error);
         }
+
+        try {
+            this.nightPolice = new NightPoliceNPC(this);
+            this.nightPolice.getNPC().setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
+        } catch (error) {
+            console.error('老王初始化失败，但游戏继续运行:', error);
+        }
     }
 
     private createNPC() {
@@ -140,7 +150,7 @@ export class MainScene extends Phaser.Scene {
             startX: 992,  // 咖啡馆门口
             startY: 820,
             speed: 80,
-            texture: 'npc1'
+                texture: 'npc_police1'
         };
 
         // 创建智能NPC（具备场景感知能力）
@@ -577,11 +587,19 @@ export class MainScene extends Phaser.Scene {
             // 气泡系统已经设置了足够高的深度(2000+)
         }
         
-        // 处理警察NPC的深度排序
+        // 处理老刘的深度排序
         if (this.policeSystem) {
             const policeNPC = this.policeSystem.getPoliceNPC();
             if (policeNPC) {
                 policeNPC.setDepth(baseNPCDepth + Math.floor(policeNPC.y));
+            }
+        }
+
+        // 处理老王的深度排序
+        if (this.nightPolice) {
+            const wangNPC = this.nightPolice.getNPC();
+            if (wangNPC) {
+                wangNPC.setDepth(baseNPCDepth + Math.floor(wangNPC.y));
             }
         }
     }
@@ -762,7 +780,7 @@ export class MainScene extends Phaser.Scene {
                 this.npc.x, this.npc.y
             );
             
-            // 🚀 检查玩家是否靠近警察NPC
+            // 检查玩家是否靠近老刘
             let distanceToPolice = Infinity;
             const policeNPC = this.policeSystem?.getPoliceNPC();
             if (policeNPC) {
@@ -772,25 +790,37 @@ export class MainScene extends Phaser.Scene {
                 );
             }
 
-            const isNearNPC = distanceToNPC < 80; // 80像素范围内
-            const isNearPolice = distanceToPolice < 80; // 80像素范围内
-            const isNear = isNearNPC || isNearPolice;
+            // 检查玩家是否靠近老王
+            let distanceToWang = Infinity;
+            const wangNPC = this.nightPolice?.getNPC();
+            if (wangNPC) {
+                distanceToWang = Phaser.Math.Distance.Between(
+                    this.player.x, this.player.y,
+                    wangNPC.x, wangNPC.y
+                );
+            }
+
+            const isNearNPC = distanceToNPC < 80;
+            const isNearPolice = distanceToPolice < 80;
+            const isNearWang = distanceToWang < 80;
+            const isNear = isNearNPC || isNearPolice || isNearWang;
 
             if (isNear && !this.isNearNPC) {
-                // 刚接近任一NPC
                 this.isNearNPC = true;
             } else if (!isNear && this.isNearNPC) {
-                // 离开所有NPC
                 this.isNearNPC = false;
             }
 
             // 检查是否按下E键
             if (this.isNearNPC && Phaser.Input.Keyboard.JustDown(this.eKey)) {
-                // 判断与哪个NPC对话
-                if (isNearPolice && distanceToPolice <= distanceToNPC) {
-                    this.startDialog('police'); // 🚀 与警察对话
+                // 找最近的 NPC 对话
+                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC);
+                if (isNearPolice && distanceToPolice === minDist) {
+                    this.startDialog('police');
+                } else if (isNearWang && distanceToWang === minDist) {
+                    this.startDialog('wang');
                 } else if (isNearNPC) {
-                    this.startDialog('npc'); // 与原NPC对话
+                    this.startDialog('npc');
                 }
             }
         } else {
@@ -821,15 +851,17 @@ export class MainScene extends Phaser.Scene {
     /**
      * 🚀 开始对话 - 支持不同NPC类型
      */
-    private currentDialogNPC: 'npc' | 'police' | null = null;
+    private currentDialogNPC: 'npc' | 'police' | 'wang' | null = null;
     
-    private startDialog(npcType: 'npc' | 'police' = 'npc'): void {
+    private startDialog(npcType: 'npc' | 'police' | 'wang' = 'npc'): void {
         this.currentDialogNPC = npcType;
         
         if (npcType === 'police') {
-            console.log('�‍♂️ 开始与警察老刘对话');
+            console.log('👮‍♂️ 开始与老刘对话');
+        } else if (npcType === 'wang') {
+            console.log('🌙 开始与老王对话');
         } else {
-            console.log('�💬 开始与NPC对话');
+            console.log('� 开始与NPC对话');
         }
         
         this.isInDialogMode = true;
@@ -846,10 +878,10 @@ export class MainScene extends Phaser.Scene {
         this.chatScrollOffset = 0;
         
         if (npcType === 'police') {
-            // 🚀 警察的初始对话
             this.addChatMessage('民警老刘', '哎，李家妹子，咋地了？\n有事儿说话！');
+        } else if (npcType === 'wang') {
+            this.addChatMessage('民警老王', '嗯。\n有事儿？');
         } else {
-            // 原NPC的初始对话
             this.addChatMessage(this.npc.getName(), '你好！有什么可以帮助你的吗？');
         }
         
@@ -913,20 +945,27 @@ export class MainScene extends Phaser.Scene {
         this.addChatMessage('你', message);
         
         if (this.currentDialogNPC === 'police') {
-            // 🚀 与警察对话 - 使用AI
-            // 先显示"思考中..."占位消息
+            // 与老刘对话
             this.addChatMessage('民警老刘', '（思考中...）');
-            
             try {
                 const response = await this.handlePoliceDialog(message);
-                // 替换掉"思考中..."消息（移除最后一条老刘消息，再添加真实回复）
                 this.replaceLastMessage('民警老刘', response);
             } catch (error) {
-                console.error('警察AI对话失败:', error);
+                console.error('老刘AI对话失败:', error);
                 this.replaceLastMessage('民警老刘', '得了，我这儿有点事儿。\n回头再唠！');
             }
+        } else if (this.currentDialogNPC === 'wang') {
+            // 与老王对话
+            this.addChatMessage('民警老王', '（思考中...）');
+            try {
+                const response = await this.nightPolice.handleConversation(message);
+                this.replaceLastMessage('民警老王', response);
+            } catch (error) {
+                console.error('老王AI对话失败:', error);
+                this.replaceLastMessage('民警老王', '行了。\n回头说。');
+            }
         } else {
-            // 原NPC对话 - 保持原有逻辑
+            // 原NPC对话
             this.time.delayedCall(1000, () => {
                 this.addChatMessage(this.npc.getName(), '阿巴阿巴');
             });
