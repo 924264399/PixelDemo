@@ -8,6 +8,7 @@ import { NPCAIAssistant, AIServiceManager } from '../utils/AIService';
 import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { ThoughtBubble } from '../game/ThoughtBubble';
+import { ShiftHandoffPool } from './ShiftHandoffPool';
 
 // ── 关键路径节点（基于 MainScene.ts 实际验证坐标）──────────────
 const WAYPOINTS = {
@@ -300,11 +301,35 @@ export class SimplePoliceNPC {
                 systemPrompt,
                 playerMessage
             );
-            return response ?? this.getFallbackResponse(playerMessage);
+            const result = response ?? this.getFallbackResponse(playerMessage);
+
+            // 判断是否需要写入交接池
+            this.maybeRecordHandoffNote(playerMessage, result);
+
+            return result;
         } catch (error) {
             console.error('老刘对话失败:', error);
             return '得了，我这儿有点事儿。\n回头再唠！';
         }
+    }
+
+    /**
+     * 对话后判断是否写入交接池
+     * 只记录涉及"治安/人/事件"的信息，过滤日常寒暄
+     */
+    private maybeRecordHandoffNote(playerMsg: string, _npcReply: string): void {
+        const keywords = ['陌生人', '可疑', '二柱子', '打架', '偷', '丢', '坏', '危险',
+                          '出事', '有人', '发现', '看见', '怪', '问题', '帮', '报警'];
+        const hit = keywords.find(k => playerMsg.includes(k));
+        if (!hit) return;
+
+        // 提取一句简短描述（取玩家原话前 20 字）
+        const summary = playerMsg.length > 20
+            ? playerMsg.slice(0, 20) + '...'
+            : playerMsg;
+
+        const hour = this.timeManager.getHour();
+        ShiftHandoffPool.getInstance().addNote('李家妹子', summary, hour);
     }
 
     private getFallbackResponse(playerMessage: string): string {

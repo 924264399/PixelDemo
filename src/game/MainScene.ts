@@ -136,7 +136,7 @@ export class MainScene extends Phaser.Scene {
         }
 
         try {
-            this.nightPolice = new NightPoliceNPC(this);
+            this.nightPolice = new NightPoliceNPC(this, this.timeManager);
             this.nightPolice.getNPC().setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
         } catch (error) {
             console.error('老王初始化失败，但游戏继续运行:', error);
