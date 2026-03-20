@@ -338,6 +338,44 @@ export class SimplePoliceNPC {
     }
 
     // ── AI 对话 ───────────────────────────────────────────────
+
+    /**
+     * 生成 LLM 开场白（基于历史上下文）
+     * 传入特殊触发词 [GREETING]，NPC 根据之前对话历史决定说什么
+     */
+    async generateGreeting(): Promise<string> {
+        const history = this.aiAssistant.getHistory();
+        const hasHistory = history.length > 0;
+
+        const trigger = hasHistory
+            ? '[GREETING] 玩家又来找你说话了。你们之前聊过，你记得那些对话。根据你们的关系和上次聊的内容，自然地开口打个招呼，可以提及上次聊的事，也可以说说你现在在干嘛。不要说"上次"这两个字，自然融入即可。只输出你说的话，不超过2句，不超过30字。'
+            : '[GREETING] 玩家第一次来找你说话。作为正在巡逻的民警，自然地开口。只输出你说的话，不超过2句，不超过30字。';
+
+        try {
+            const systemPrompt = buildNPCPrompt(
+`你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。东北口语，说话简短有执勤感。`
+            );
+            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
+            // 开场白不计入正式对话历史（避免污染上下文）
+            // 但 handleConversation 已经把它加进去了，所以手动移除最后两条
+            const hist = this.aiAssistant.getHistory();
+            // 移除刚才的 [GREETING] 触发 + 回复，保持历史干净
+            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+            return response ?? this.getFallbackGreeting(hasHistory);
+        } catch {
+            return this.getFallbackGreeting(hasHistory);
+        }
+    }
+
+    private getFallbackGreeting(hasHistory: boolean): string {
+        if (hasHistory) {
+            const opts = ['又来了，有事儿？', '咋了，有情况？', '说吧，听着呢。'];
+            return opts[Math.floor(Math.random() * opts.length)];
+        }
+        const opts = ['哎，李家妹子，咋了？', '正巡逻呢，有事儿说。', '咋了这是？'];
+        return opts[Math.floor(Math.random() * opts.length)];
+    }
+
     async handleConversation(playerMessage: string): Promise<string> {
         try {
             const systemPrompt = buildNPCPrompt(

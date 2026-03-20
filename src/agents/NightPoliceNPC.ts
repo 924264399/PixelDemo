@@ -266,6 +266,37 @@ export class NightPoliceNPC {
         this.thoughtBubble.show('🔄 收到交接...', 3000);
     }
 
+    async generateGreeting(): Promise<string> {
+        const history = this.aiAssistant.getHistory();
+        const hasHistory = history.length > 0;
+
+        const trigger = hasHistory
+            ? '[GREETING] 玩家又来找你说话了。你们之前聊过，你记得那些对话。根据之前的内容，简短自然地开口，可以提到之前说的事。不要说"上次"，自然融入。只输出你说的话，不超过2句，不超过25字。'
+            : '[GREETING] 玩家第一次来找你说话。你是正在夜巡的民警，简短冷静地开口。只输出你说的话，不超过2句，不超过20字。';
+
+        try {
+            const systemPrompt = buildNPCPrompt(
+`你是老王（王大春），47岁，哑巴镇夜班社区民警。话少，东北口语，冷静克制。`
+            );
+            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
+            // 移除 [GREETING] 触发，不污染正式对话历史
+            const hist = this.aiAssistant.getHistory();
+            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+            return response ?? this.getFallbackGreeting(hasHistory);
+        } catch {
+            return this.getFallbackGreeting(hasHistory);
+        }
+    }
+
+    private getFallbackGreeting(hasHistory: boolean): string {
+        if (hasHistory) {
+            const opts = ['又有事儿？', '说。', '咋了？'];
+            return opts[Math.floor(Math.random() * opts.length)];
+        }
+        const opts = ['嗯。\n有事儿？', '夜里咋还在外头？', '说。'];
+        return opts[Math.floor(Math.random() * opts.length)];
+    }
+
     async handleConversation(playerMessage: string): Promise<string> {
         try {
             // ✅ 使用本地缓存的交接信息（而非每次重新读已清空的 Pool）

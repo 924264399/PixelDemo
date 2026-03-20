@@ -432,16 +432,19 @@ export class MainScene extends Phaser.Scene {
         let velocityX = 0;
         let velocityY = 0;
 
-        if (this.cursors.left.isDown) {
-            velocityX = -160;
-        } else if (this.cursors.right.isDown) {
-            velocityX = 160;
-        }
+        // 对话期间玩家禁止移动
+        if (!this.isInDialogMode) {
+            if (this.cursors.left.isDown) {
+                velocityX = -160;
+            } else if (this.cursors.right.isDown) {
+                velocityX = 160;
+            }
 
-        if (this.cursors.up.isDown) {
-            velocityY = -160;
-        } else if (this.cursors.down.isDown) {
-            velocityY = 160;
+            if (this.cursors.up.isDown) {
+                velocityY = -160;
+            } else if (this.cursors.down.isDown) {
+                velocityY = 160;
+            }
         }
 
         // 玩家脚部碰撞包围盒（角色 1.5× 放大后脚部约 28px 宽）
@@ -985,9 +988,15 @@ export class MainScene extends Phaser.Scene {
         this.chatScrollOffset = 0;
         
         if (npcType === 'police') {
-            this.addChatMessage('民警老刘', '哎，李家妹子，咋地了？\n有事儿说话！');
+            this.addChatMessage('民警老刘', '（走过来）');
+            this.policeSystem?.getPoliceOfficer?.()?.generateGreeting().then((greeting: string) => {
+                this.replaceLastMessage('民警老刘', greeting);
+            });
         } else if (npcType === 'wang') {
-            this.addChatMessage('民警老王', '嗯。\n有事儿？');
+            this.addChatMessage('民警老王', '（抬起头）');
+            this.nightPolice?.generateGreeting().then((greeting: string) => {
+                this.replaceLastMessage('民警老王', greeting);
+            });
         }
         
         // 重置输入
