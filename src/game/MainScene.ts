@@ -2,14 +2,14 @@ import Phaser from 'phaser';
 import { NPC, NPCConfig, NPCState } from './NPC';
 import { PathPlanner, Waypoint } from './PathPlanner';
 import { CafeWorkerAgent, NPCPersonality } from './AIAgent';
-import { SmartNPC, SceneManager } from './SmartNPC';
+// import { SmartNPC, SceneManager } from './SmartNPC'; // 已停用：咖啡店员旧系统
 import { TimeManager } from './TimeManager';
 import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 import { NightPoliceNPC } from '../agents/NightPoliceNPC';
 
 export class MainScene extends Phaser.Scene {
     private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
-    private npc!: NPC; // 单个NPC实例
+    private npc!: NPC; // 保留字段兼容旧代码引用，不再使用 SmartNPC
     private policeSystem!: PoliceNPCIntegration; // 白班警察老刘
     private nightPolice!: NightPoliceNPC;         // 夜班警察老王
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
@@ -154,13 +154,10 @@ export class MainScene extends Phaser.Scene {
         };
 
         // 创建智能NPC（具备场景感知能力）
-        this.npc = new SmartNPC(this, npcConfig);
-
-        // 设置NPC碰撞检测器
-        this.npc.setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
-
-        // 设置NPC自动巡逻（示例：咖啡馆 → 便利店）
-        this.setupNPCTask();
+        // ── SmartNPC 咖啡店员已停用，由独立 NPC Agent 系统替代 ──
+        // this.npc = new SmartNPC(this, npcConfig);
+        // this.npc.setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
+        // this.setupNPCTask();
     }
 
     private setupNPCTask() {
@@ -447,7 +444,7 @@ export class MainScene extends Phaser.Scene {
         }
 
         // 更新咖啡店员物理移动
-        this.npc.update();
+        // this.npc.update(); // SmartNPC 已停用
 
         // 更新老刘：状态机 + 物理移动
         try {
@@ -536,19 +533,16 @@ export class MainScene extends Phaser.Scene {
         // 获取玩家和NPC当前位置（整数坐标）
         const playerX = Math.floor(this.player.x);
         const playerY = Math.floor(this.player.y);
-        const npcX = Math.floor(this.npc.x);
-        const npcY = Math.floor(this.npc.y);
+        // SmartNPC 已停用，屋顶透明度只看玩家位置
         const roofKeys = ['roof_home', 'roof_cafe', 'roof_store'];
 
-        // 更新目标透明度 - 考虑玩家和NPC位置
         roofKeys.forEach(key => {
             const playerUnderRoof = this.hasRoofPixelAt(playerX, playerY, key);
-            const npcUnderRoof = this.hasRoofPixelAt(npcX, npcY, key);
-            
-            // 混合策略：玩家优先，但NPC也有影响
+            const npcUnderRoof = false; // SmartNPC 已停用
+
             let targetAlpha = 1.0;
             if (playerUnderRoof) {
-                targetAlpha = 0.0; // 玩家在屋内，完全透明
+                targetAlpha = 0.0;
             } else if (npcUnderRoof) {
                 targetAlpha = 0.3; // NPC在屋内，半透明以便观察
             }
@@ -583,23 +577,13 @@ export class MainScene extends Phaser.Scene {
     private updateDepthSorting(): void {
         // 获取玩家和NPC的Y坐标
         const playerY = this.player.y;
-        const npcY = this.npc.y;
-
         // 基础深度值
         const basePlayerDepth = 100;
         const baseNPCDepth = 100;
 
-        // 根据Y坐标设置深度（Y值越大，越靠前显示）
+        // 玩家深度
         this.player.setDepth(basePlayerDepth + Math.floor(playerY));
-        this.npc.setDepth(baseNPCDepth + Math.floor(npcY));
 
-        // 确保气泡始终在最上层
-        if ((this.npc as SmartNPC).speechBubble) {
-            // 气泡深度比NPC高1000
-            const bubbleDepth = baseNPCDepth + Math.floor(npcY) + 1000;
-            // 气泡系统已经设置了足够高的深度(2000+)
-        }
-        
         // 处理老刘的深度排序
         if (this.policeSystem) {
             const policeNPC = this.policeSystem.getPoliceNPC();
@@ -788,11 +772,9 @@ export class MainScene extends Phaser.Scene {
     private updateDialogSystem(): void {
         if (!this.isInDialogMode) {
             // 检查玩家是否靠近原NPC
-            const distanceToNPC = Phaser.Math.Distance.Between(
-                this.player.x, this.player.y,
-                this.npc.x, this.npc.y
-            );
-            
+            // SmartNPC 已停用，距离设为无限远
+            const distanceToNPC = Infinity;
+
             // 检查玩家是否靠近老刘
             let distanceToPolice = Infinity;
             const policeNPC = this.policeSystem?.getPoliceNPC();
@@ -850,7 +832,8 @@ export class MainScene extends Phaser.Scene {
     private showInteractionPrompt(): void {
         this.promptText.setText('按 E 键对话');
         // 设置提示位置在NPC上方
-        this.promptText.setPosition(this.npc.x, this.npc.y - 100);
+        // SmartNPC 已停用，promptText 不再跟随旧 NPC
+        // this.promptText.setPosition(this.npc.x, this.npc.y - 100);
         this.promptText.setVisible(true);
     }
 
@@ -896,8 +879,6 @@ export class MainScene extends Phaser.Scene {
             this.addChatMessage('民警老刘', '哎，李家妹子，咋地了？\n有事儿说话！');
         } else if (npcType === 'wang') {
             this.addChatMessage('民警老王', '嗯。\n有事儿？');
-        } else {
-            this.addChatMessage(this.npc.getName(), '你好！有什么可以帮助你的吗？');
         }
         
         // 重置输入
@@ -908,10 +889,6 @@ export class MainScene extends Phaser.Scene {
         // 激活隐藏输入框以支持中文输入
         this.hiddenInput.focus();
         
-        // 设置NPC为对话状态
-        if (npcType === 'npc') {
-            this.npc.setTalking();
-        }
         // 警察NPC的状态由PoliceOfficerNPC内部管理
     }
 
@@ -935,9 +912,6 @@ export class MainScene extends Phaser.Scene {
         this.hiddenInput.blur();
         this.hiddenInput.value = '';
         
-        // 恢复NPC状态
-        this.npc.setIdle();
-
         // 恢复警察巡逻
         if (this.currentDialogNPC === 'police') {
             this.policeSystem?.getPoliceOfficer()?.resumePatrol();
@@ -987,11 +961,6 @@ export class MainScene extends Phaser.Scene {
                 console.error('老王AI对话失败:', error);
                 this.replaceLastMessage('民警老王', '行了。\n回头说。');
             }
-        } else {
-            // 原NPC对话
-            this.time.delayedCall(1000, () => {
-                this.addChatMessage(this.npc.getName(), '阿巴阿巴');
-            });
         }
     }
 

@@ -68,8 +68,26 @@ function buildPath(
     return [...mid, jitter(to, 10)];
 }
 
+// ── 地点关键词映射 ─────────────────────────────────────────────
+const LOCATION_KEYWORDS: { keywords: string[]; dest: { x: number; y: number }; label: string }[] = [
+    { keywords: ['公园', '游乐', '广场'], dest: WAYPOINTS.PARK_CORE,  label: '公园' },
+    { keywords: ['便利店', '超市', '张婶', '商店'], dest: WAYPOINTS.STORE, label: '便利店' },
+    { keywords: ['咖啡', '咖啡馆', '大强'], dest: WAYPOINTS.CAFE,  label: '咖啡馆' },
+    { keywords: ['路口', '十字', '中间'], dest: WAYPOINTS.CROSS_ROAD, label: '路口' },
+];
+
+/** 从玩家消息里识别地点，返回 { dest, label } 或 null */
+function extractLocation(msg: string): { dest: { x: number; y: number }; label: string } | null {
+    for (const entry of LOCATION_KEYWORDS) {
+        if (entry.keywords.some(k => msg.includes(k))) {
+            return { dest: entry.dest, label: entry.label };
+        }
+    }
+    return null;
+}
+
 // ── 工作状态机 ────────────────────────────────────────────────
-type PatrolPhase = 'off_duty' | 'entering' | 'on_duty' | 'going_home';
+type PatrolPhase = 'off_duty' | 'entering' | 'on_duty' | 'investigating' | 'going_home';
 
 export class SimplePoliceNPC {
     private npc: NPC;
@@ -83,7 +101,19 @@ export class SimplePoliceNPC {
 
     private thoughtBubble!: ThoughtBubble;
     private lastThoughtTime = 0;
-    private readonly THOUGHT_INTERVAL = 18000; // 随机内心独白间隔 18 秒
+    private readonly THOUGHT_INTERVAL = 18000;
+
+    // ── 出警子状态 ──────────────────────────────────────────────
+    private investigateTarget: { x: number; y: number } | null = null;
+    private investigateLabel = '';
+    private investigateStartTime = 0;
+    private readonly INVESTIGATE_TIMEOUT = 60_000;
+
+    // 对话期间记录的待出警地点，对话结束后在 resumePatrol 里触发
+    private pendingDispatch: { dest: { x: number; y: number }; label: string } | null = null;
+
+    // 对话进行中标志：update() 暂停状态机，防止 phase 被意外推进
+    private isTalking = false;
 
     constructor(scene: Phaser.Scene, timeManager: TimeManager) {
         console.log('🚔 创建老刘（白班警察）...');
@@ -116,6 +146,12 @@ export class SimplePoliceNPC {
 
     // ── 每帧调用（同步） ───────────────────────────────────────
     update(): void {
+        // 对话期间暂停状态机，防止 entering/on_duty 被意外推进
+        if (this.isTalking) {
+            this.thoughtBubble.update();
+            return;
+        }
+
         const hour = this.timeManager.getHour();
 
         // 气泡跟随 NPC 移动
@@ -154,8 +190,26 @@ export class SimplePoliceNPC {
                 } else {
                     this.advanceQueue();
                 }
-                // 巡逻途中偶尔冒出随机独白
                 this.maybeShowRandomThought();
+                break;
+
+            case 'investigating':
+                // 下班时间到了，直接打断出警，回家
+                if (hour >= 22 || hour < 10) {
+                    this.endShift();
+                    break;
+                }
+                if (this.isQueueDone()) {
+                    // 到达目标地点，停留等待超时后回到正常巡逻
+                    if (Date.now() - this.investigateStartTime > this.INVESTIGATE_TIMEOUT) {
+                        console.log('👮 老刘出警结束，恢复正常巡逻');
+                        this.showThought('没发现啥，继续转', 3000);
+                        this.phase = 'on_duty';
+                        this.lastPatrolTime = 0;
+                    }
+                } else {
+                    this.advanceQueue();
+                }
                 break;
 
             case 'going_home':
@@ -303,8 +357,14 @@ export class SimplePoliceNPC {
             );
             const result = response ?? this.getFallbackResponse(playerMessage);
 
-            // 判断是否需要写入交接池
+            // 写入交接池
             this.maybeRecordHandoffNote(playerMessage, result);
+
+            // 识别地点 → 记录出警目标（对话结束后 resumePatrol 会真正触发）
+            const location = extractLocation(playerMessage);
+            if (location && (this.phase === 'on_duty' || this.phase === 'investigating')) {
+                this.pendingDispatch = location;
+            }
 
             return result;
         } catch (error) {
@@ -350,16 +410,95 @@ export class SimplePoliceNPC {
         return responses[Math.floor(Math.random() * responses.length)];
     }
 
-    /** 对话开始：暂停巡逻，隐藏气泡 */
+    /**
+     * 出警：打断当前巡逻，立刻前往指定地点查看
+     * 只在 on_duty 状态下有效（entering/going_home 不响应）
+     */
+    dispatchTo(dest: { x: number; y: number }, label: string): void {
+        console.log(`🚨 [dispatchTo] 当前phase=${this.phase}, 目标=${label}`);
+        if (this.phase !== 'on_duty' && this.phase !== 'investigating') {
+            console.warn(`⚠️ 老刘无法出警，当前状态: ${this.phase}`);
+            return;
+        }
+        console.log(`🚨 老刘出警 → ${label} (${dest.x}, ${dest.y})`);
+        this.phase = 'investigating';
+        this.investigateTarget = dest;
+        this.investigateLabel = label;
+        this.investigateStartTime = Date.now();
+
+        // 清空当前路径，重新规划
+        this.waypointQueue = [];
+        const cur = this.npc.getPosition();
+        this.waypointQueue = buildPath(cur, dest);
+        this.npc.setIdle(); // 打断当前移动
+        this.advanceQueue();
+
+        // 出发后 3 秒冒第一条 LLM 独白，之后每 18 秒一条
+        this.scheduleInvestigateThought(3000);
+    }
+
+    /**
+     * 出警途中循环生成 LLM 内心独白
+     * 每次显示完后，如果还在 investigating 状态，再隔一段时间生成下一条
+     */
+    private scheduleInvestigateThought(delayMs: number): void {
+        this.npc.scene.time.delayedCall(delayMs, async () => {
+            if (this.phase !== 'investigating') return; // 已结束出警，停止
+            await this.generateAndShowThought();
+            // 显示 4 秒后继续下一条（共享上下文，自然演变）
+            this.scheduleInvestigateThought(18000);
+        });
+    }
+
+    /**
+     * 调用 LLM 生成一句内心独白并显示在气泡里
+     * 用 [THOUGHT] 标签避免污染对话历史（不走 handleConversation）
+     */
+    private async generateAndShowThought(): Promise<void> {
+        try {
+            const label = this.investigateLabel || '目标地点';
+            const prompt = `[THOUGHT] 你是老刘，正在赶往${label}处理情况。根据你刚才和李家妹子的对话，用第一人称说一句内心独白。要求：不超过12个字，东北口语，不要标点符号之外的任何格式。只输出那句话本身。`;
+            const thought = await this.aiAssistant.handleConversation('__system__', prompt);
+            if (thought && this.phase === 'investigating') {
+                // 清理可能的引号和多余空白
+                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
+                this.showThought(clean, 4000);
+            }
+        } catch {
+            // LLM 失败时 fallback 到硬编码
+            this.showThought(`那小偷跑哪旮旯了`, 3000);
+        }
+    }
+
+    /** 对话开始：暂停状态机 + 停止移动 */
     pausePatrol(): void {
+        this.isTalking = true;      // ← 冻结 update() 状态机
         this.thoughtBubble.hide();
         this.npc.setTalking();
     }
 
-    /** 对话结束：恢复巡逻 */
+    /** 对话结束：恢复状态机，按需出警 */
     resumePatrol(): void {
         this.npc.setIdle();
-        this.lastPatrolTime = 0;
+        if (this.pendingDispatch) {
+            const { dest, label } = this.pendingDispatch;
+            this.pendingDispatch = null;
+            // 先把所有状态设好，再解冻 update()
+            this.phase = 'on_duty';
+            this.waypointQueue = [];
+            // 直接内联出警逻辑，不走 dispatchTo() 避免 phase 检查干扰
+            console.log(`🚨 [resumePatrol] 出警 → ${label}`);
+            this.phase = 'investigating';
+            this.investigateTarget = dest;
+            this.investigateLabel = label;
+            this.investigateStartTime = Date.now();
+            this.waypointQueue = buildPath(this.npc.getPosition(), dest);
+            this.advanceQueue();
+            this.showThought(`去${label}瞅瞅！`, 3500);
+        } else {
+            this.lastPatrolTime = 0;
+        }
+        this.isTalking = false;     // ← 最后才解冻，所有状态已就绪
     }
 
     /** 对话结束后的反应气泡（由 MainScene 调用） */

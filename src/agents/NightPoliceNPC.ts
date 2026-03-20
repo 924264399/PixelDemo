@@ -47,7 +47,7 @@ function buildWangPath(
     return [...mid, wangJitter(to, 10)];
 }
 
-type WangPhase = 'off_duty' | 'entering' | 'on_duty' | 'going_home';
+type WangPhase = 'off_duty' | 'entering' | 'on_duty' | 'investigating' | 'going_home';
 
 export class NightPoliceNPC {
     private npc: NPC;
@@ -60,8 +60,20 @@ export class NightPoliceNPC {
     private readonly PATROL_INTERVAL = 10000;
 
     private thoughtBubble!: ThoughtBubble;
-    private handoffDone = false;        // 今天是否已完成交接
-    private handoffPromptCache = '';    // 从老刘那里接收的信息，缓存到本地
+    private handoffDone = false;
+    private handoffPromptCache = '';
+
+    // ── 出警子状态 ──────────────────────────────────────────────
+    private investigateTarget: {x:number,y:number} | null = null;
+    private investigateLabel = '';
+    private investigateStartTime = 0;
+    private readonly INVESTIGATE_TIMEOUT = 60_000;
+
+    // 对话期间记录的待出警地点，对话结束后触发
+    private pendingDispatch: { dest: {x:number,y:number}; label: string } | null = null;
+
+    // 对话进行中标志：冻结 update() 状态机
+    private isTalking = false;
 
     constructor(scene: Phaser.Scene, timeManager: TimeManager) {
         try {
@@ -98,6 +110,12 @@ export class NightPoliceNPC {
     }
 
     update(): void {
+        // 对话期间冻结状态机
+        if (this.isTalking) {
+            this.thoughtBubble.update();
+            return;
+        }
+
         const hour = this.timeManager.getHour();
         this.thoughtBubble.update();
 
@@ -132,6 +150,23 @@ export class NightPoliceNPC {
                     if (now - this.lastPatrolTime > this.PATROL_INTERVAL) {
                         this.pickNextPatrol();
                         this.lastPatrolTime = now;
+                    }
+                } else {
+                    this.advanceQueue();
+                }
+                break;
+
+            case 'investigating':
+                if (hour >= 10 && hour < 22) {
+                    this.endShift();
+                    break;
+                }
+                if (this.isQueueDone()) {
+                    if (Date.now() - this.investigateStartTime > this.INVESTIGATE_TIMEOUT) {
+                        console.log('🌙 老王出警结束，继续夜巡');
+                        this.thoughtBubble.show('黑灯瞎火没啥动静', 3000);
+                        this.phase = 'on_duty';
+                        this.lastPatrolTime = 0;
                     }
                 } else {
                     this.advanceQueue();
@@ -232,8 +267,22 @@ export class NightPoliceNPC {
                 systemPrompt,
                 playerMessage
             );
+            const result = response ?? this.getFallbackResponse(playerMessage);
 
-            return response ?? this.getFallbackResponse(playerMessage);
+            // 识别地点 → 出警
+            const WANG_LOCATION_MAP = [
+                { keywords: ['公园', '游乐', '广场'], dest: WANG_WAYPOINTS.PARK_CORE,  label: '公园' },
+                { keywords: ['便利店', '超市', '张婶', '商店'], dest: WANG_WAYPOINTS.STORE, label: '便利店' },
+                { keywords: ['咖啡', '咖啡馆', '大强'], dest: WANG_WAYPOINTS.CAFE,  label: '咖啡馆' },
+                { keywords: ['路口', '十字', '中间'], dest: WANG_WAYPOINTS.CROSS_ROAD, label: '路口' },
+            ];
+            // 识别到地点 → 存入 pendingDispatch，对话结束后统一触发
+            const hit = WANG_LOCATION_MAP.find(e => e.keywords.some(k => playerMessage.includes(k)));
+            if (hit && (this.phase === 'on_duty' || this.phase === 'investigating')) {
+                this.pendingDispatch = { dest: hit.dest, label: hit.label };
+            }
+
+            return result;
         } catch (error) {
             console.error('老王对话处理失败:', error);
             return '有事儿说。';
@@ -306,14 +355,74 @@ export class NightPoliceNPC {
         return responses[Math.floor(Math.random() * responses.length)];
     }
 
-    /** 对话开始：暂停巡逻 */
+    /** 出警：打断当前巡逻，立刻前往目标地点 */
+    dispatchTo(dest: {x:number,y:number}, label: string): void {
+        if (this.phase !== 'on_duty' && this.phase !== 'investigating') return;
+        console.log(`🚨 老王出警 → ${label} (${dest.x}, ${dest.y})`);
+        this.phase = 'investigating';
+        this.investigateTarget = dest;
+        this.investigateLabel = label;
+        this.investigateStartTime = Date.now();
+
+        this.waypointQueue = [];
+        const cur = this.npc.getPosition();
+        this.waypointQueue = buildWangPath(cur, dest);
+        this.npc.setIdle();
+        this.advanceQueue();
+
+        this.scheduleInvestigateThought(3000);
+    }
+
+    /** 出警途中循环生成 LLM 内心独白 */
+    private scheduleInvestigateThought(delayMs: number): void {
+        this.npc.scene.time.delayedCall(delayMs, async () => {
+            if (this.phase !== 'investigating') return;
+            await this.generateAndShowThought();
+            this.scheduleInvestigateThought(18000);
+        });
+    }
+
+    /** 调用 LLM 生成一句内心独白 */
+    private async generateAndShowThought(): Promise<void> {
+        try {
+            const label = this.investigateLabel || '目标地点';
+            const prompt = `[THOUGHT] 你是老王，正在赶往${label}核查情况。根据刚才和李家妹子的对话，用第一人称说一句内心独白。要求：不超过12个字，东北口语，话少而冷静，只输出那句话本身。`;
+            const thought = await this.aiAssistant.handleConversation('__system__', prompt);
+            if (thought && this.phase === 'investigating') {
+                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
+                this.thoughtBubble.show(clean, 4000);
+            }
+        } catch {
+            this.thoughtBubble.show(`黑灯瞎火的，仔细瞅`, 3000);
+        }
+    }
+
+    /** 对话开始：冻结状态机 + 停止移动 */
     pausePatrol(): void {
+        this.isTalking = true;
+        this.thoughtBubble.hide();
         this.npc.setTalking();
     }
 
-    /** 对话结束：恢复巡逻 */
+    /** 对话结束：按需出警，最后解冻状态机 */
     resumePatrol(): void {
         this.npc.setIdle();
+        if (this.pendingDispatch) {
+            const { dest, label } = this.pendingDispatch;
+            this.pendingDispatch = null;
+            // 先把所有状态设好再解冻，防止 update() 插队
+            this.phase = 'investigating';
+            this.investigateTarget = dest;
+            this.investigateLabel = label;
+            this.investigateStartTime = Date.now();
+            this.waypointQueue = buildWangPath(this.npc.getPosition(), dest);
+            this.advanceQueue();
+        this.scheduleInvestigateThought(3000);
+        console.log(`🚨 [老王resumePatrol] 出警 → ${label}`);
+        } else {
+            this.lastPatrolTime = 0;
+        }
+        this.isTalking = false; // 最后解冻
     }
 
     getStatus() {
