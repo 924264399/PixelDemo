@@ -10,6 +10,14 @@ export interface Waypoint {
     type?: 'building' | 'road' | 'park' | 'intersection';
 }
 
+/** 区域定义：进出该区域必须经过指定网关节点 */
+interface ZoneDef {
+    /** 判定坐标是否在该区域内（包围盒） */
+    contains: (x: number, y: number) => boolean;
+    /** 进出该区域的唯一网关路网节点 ID */
+    gateway: string;
+}
+
 export interface PathRequest {
     from: Waypoint;
     to: Waypoint;
@@ -19,6 +27,29 @@ export interface PathRequest {
 }
 
 export class PathPlanner {
+
+    /**
+     * 区域门禁定义：进出这些区域必须经过对应的 gateway 节点
+     * 公园区域：大约 x: 1100~1800, y: 1100~1800（根据实际地图调整）
+     */
+    private static readonly ZONES: ZoneDef[] = [
+        {
+            // 公园围墙范围（包围盒，覆盖 park_north / park_core / park_south 所在区域）
+            contains: (x, y) => x >= 1100 && x <= 1850 && y >= 1100 && y <= 1850,
+            gateway: 'park_north',
+        },
+    ];
+
+    /**
+     * 检查坐标是否在某个门禁区域内，如果是则返回该区域定义
+     */
+    private static getZoneForPoint(point: Waypoint): ZoneDef | null {
+        for (const zone of this.ZONES) {
+            if (zone.contains(point.x, point.y)) return zone;
+        }
+        return null;
+    }
+
     // 基于地图坐标文档的关键路点
     private static readonly WAYPOINTS: Map<string, Waypoint> = new Map([
         // 交通枢纽
@@ -62,7 +93,37 @@ export class PathPlanner {
      */
     static planPath(request: PathRequest): Waypoint[] {
         const { from, to, randomization = 0.3, npcId } = request;
-        
+
+        // ── 门禁约束预处理 ──────────────────────────────────────────
+        const fromZone = this.getZoneForPoint(from);
+        const toZone   = this.getZoneForPoint(to);
+
+        // 如果起/终点本身就是该区域的网关节点，不施加门禁（防止无限递归）
+        // park_north 自身坐标在区域内，若不排除会导致 planPath 递归调用自身
+        const isFromGateway = fromZone
+            ? (() => { const gw = this.WAYPOINTS.get(fromZone.gateway); return !!gw && gw.x === from.x && gw.y === from.y; })()
+            : false;
+        const isToGateway = toZone
+            ? (() => { const gw = this.WAYPOINTS.get(toZone.gateway); return !!gw && gw.x === to.x && gw.y === to.y; })()
+            : false;
+
+        // 起点在门禁区（且不是网关本身）→ 必须先出大门
+        if (fromZone && !isFromGateway && (!toZone || toZone.gateway !== fromZone.gateway)) {
+            const gatewayWp = this.WAYPOINTS.get(fromZone.gateway)!;
+            const legOut  = this.planPath({ from, to: gatewayWp, npcId, randomization: 0 });
+            const legMain = this.planPath({ from: gatewayWp, to, npcId, randomization });
+            return [...legOut.slice(0, -1), ...legMain];
+        }
+
+        // 终点在门禁区（且不是网关本身）→ 必须先到大门再进入
+        if (toZone && !isToGateway && (!fromZone || fromZone.gateway !== toZone.gateway)) {
+            const gatewayWp = this.WAYPOINTS.get(toZone.gateway)!;
+            const legMain = this.planPath({ from, to: gatewayWp, npcId, randomization });
+            const legIn   = this.planPath({ from: gatewayWp, to, npcId, randomization: 0 });
+            return [...legMain.slice(0, -1), ...legIn];
+        }
+        // ── 门禁约束预处理 结束 ────────────────────────────────────
+
         // 1. 找到最近的路网节点
         const startNode = this.findNearestWaypoint(from);
         const endNode = this.findNearestWaypoint(to);
@@ -120,6 +181,9 @@ export class PathPlanner {
         let minDistance = Infinity;
 
         for (const [nodeId, waypoint] of this.WAYPOINTS.entries()) {
+            // 只考虑在路网中有连接的节点，孤立节点（如 player_home、cafe_work）跳过
+            if (!this.PATH_NETWORK.has(nodeId)) continue;
+
             const distance = Math.sqrt(
                 Math.pow(point.x - waypoint.x, 2) + Math.pow(point.y - waypoint.y, 2)
             );

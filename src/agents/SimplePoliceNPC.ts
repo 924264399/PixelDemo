@@ -9,6 +9,7 @@ import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { ThoughtBubble } from '../game/ThoughtBubble';
 import { ShiftHandoffPool } from './ShiftHandoffPool';
+import { PathPlanner } from '../game/PathPlanner';
 
 // ── 关键路径节点（基于 MainScene.ts 实际验证坐标）──────────────
 const WAYPOINTS = {
@@ -24,17 +25,15 @@ const WAYPOINTS = {
     PARK_SOUTH:   { x: 1142, y: 1610 }, // 公园入口（南）
 };
 
-// 工作状态下的随机巡逻目标
+// 工作状态下的随机巡逻目标（公园统一用 PARK_CORE，门禁约束自动插入大门）
 const PATROL_DESTINATIONS = [
     WAYPOINTS.CROSS_ROAD,
     WAYPOINTS.CAFE,
     WAYPOINTS.STORE,
-    WAYPOINTS.PARK_NORTH,
-    WAYPOINTS.PARK_CORE,
-    WAYPOINTS.PARK_SOUTH,
+    WAYPOINTS.PARK_CORE,  // PathPlanner 会自动先过 park_north 大门
 ];
 
-/** 给路径节点加随机抖动，避免多NPC重叠在同一个像素（范围刻意保持小，防止抖进障碍物） */
+/** 给路径节点加随机抖动 */
 function jitter(p: { x: number; y: number }, range = 10): { x: number; y: number } {
     return {
         x: p.x + Math.round((Math.random() - 0.5) * range * 2),
@@ -43,29 +42,36 @@ function jitter(p: { x: number; y: number }, range = 10): { x: number; y: number
 }
 
 /**
- * 根据起点和终点，插入必要的中间路径节点（每个节点带随机抖动）
+ * 使用 PathPlanner 规划老刘路径，享有门禁约束（公园必过大门）
+ * 入镇时（from.x < 650）额外插入 TOWN_ENTRY 中继点
  */
 function buildPath(
     from: { x: number; y: number },
-    to: { x: number; y: number }
+    to: { x: number; y: number },
+    npcId = 'officer_liu'
 ): { x: number; y: number }[] {
-    const mid: { x: number; y: number }[] = [];
+    const segments: { x: number; y: number }[][] = [];
 
-    // 从镇外出发时，先经过镇入口（入口抖动小一点，别出界）
+    let planFrom = from;
     if (from.x < 650) {
-        mid.push(jitter(WAYPOINTS.TOWN_ENTRY, 8));
+        // 还在镇外，先手动插入入口点
+        segments.push([jitter(WAYPOINTS.TOWN_ENTRY, 8)]);
+        planFrom = WAYPOINTS.TOWN_ENTRY;
     }
 
-    // 起点或终点不在主路附近时，经过十字路口中转
-    const onMainRoad = (p: { x: number; y: number }) =>
-        Math.abs(p.y - WAYPOINTS.CROSS_ROAD.y) < 200;
+    // PathPlanner 规划（含门禁约束）
+    const planned = PathPlanner.planPath({
+        from: planFrom,
+        to,
+        npcId,
+        randomization: 0.2,
+    });
 
-    if (!onMainRoad(from) || !onMainRoad(to)) {
-        mid.push(jitter(WAYPOINTS.CROSS_ROAD, 10));
-    }
+    // planPath 第一个点是 from 本身，跳过避免重复
+    const routePoints = planned.slice(1).map(wp => ({ x: wp.x, y: wp.y }));
+    segments.push(routePoints);
 
-    // 目的地本身也稍微抖一下
-    return [...mid, jitter(to, 10)];
+    return segments.flat();
 }
 
 // ── 地点关键词映射 ─────────────────────────────────────────────

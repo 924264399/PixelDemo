@@ -9,6 +9,7 @@ import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { ThoughtBubble } from '../game/ThoughtBubble';
 import { ShiftHandoffPool } from './ShiftHandoffPool';
+import { PathPlanner } from '../game/PathPlanner';
 
 // 老王关键路径节点（从镇东方向入镇）
 const WANG_WAYPOINTS = {
@@ -21,10 +22,11 @@ const WANG_WAYPOINTS = {
     CAFE:       { x: 992,  y: 820  }, // 咖啡馆
 };
 
+// 巡逻目标只写"终点"，公园统一用 PARK_CORE
+// 进出大门由 PathPlanner 门禁约束自动处理，无需手动插入 PARK_NORTH
 const WANG_PATROL_DESTINATIONS = [
     WANG_WAYPOINTS.CROSS_ROAD,
-    WANG_WAYPOINTS.PARK_CORE,
-    WANG_WAYPOINTS.PARK_NORTH,
+    WANG_WAYPOINTS.PARK_CORE,   // PathPlanner 会自动先过 park_north
     WANG_WAYPOINTS.STORE,
     WANG_WAYPOINTS.CAFE,
 ];
@@ -36,15 +38,38 @@ function wangJitter(p: {x:number,y:number}, range = 10): {x:number,y:number} {
     };
 }
 
+/**
+ * 使用 PathPlanner 规划老王路径，享有门禁约束（公园必过大门）
+ * 入镇时（from.x > 1750）额外插入 TOWN_ENTRY 中继点
+ */
 function buildWangPath(
     from: {x:number,y:number},
-    to: {x:number,y:number}
+    to: {x:number,y:number},
+    npcId = 'officer_wang_night'
 ): {x:number,y:number}[] {
-    const mid: {x:number,y:number}[] = [];
-    if (from.x > 1750) mid.push(wangJitter(WANG_WAYPOINTS.TOWN_ENTRY, 8));
-    const onMainRoad = (p:{x:number,y:number}) => Math.abs(p.y - WANG_WAYPOINTS.CROSS_ROAD.y) < 200;
-    if (!onMainRoad(from) || !onMainRoad(to)) mid.push(wangJitter(WANG_WAYPOINTS.CROSS_ROAD, 10));
-    return [...mid, wangJitter(to, 10)];
+    // 入镇阶段：先走到镇入口再交给 PathPlanner
+    const segments: {x:number,y:number}[][] = [];
+
+    let planFrom = from;
+    if (from.x > 1750) {
+        // 还在镇外，先手动插入入口点
+        segments.push([wangJitter(WANG_WAYPOINTS.TOWN_ENTRY, 8)]);
+        planFrom = WANG_WAYPOINTS.TOWN_ENTRY;
+    }
+
+    // PathPlanner 规划（含门禁约束）
+    const planned = PathPlanner.planPath({
+        from: planFrom,
+        to,
+        npcId,
+        randomization: 0.2,
+    });
+
+    // planPath 返回的第一个点是 from 本身，跳过以避免重复
+    const routePoints = planned.slice(1).map(wp => ({ x: wp.x, y: wp.y }));
+    segments.push(routePoints);
+
+    return segments.flat();
 }
 
 type WangPhase = 'off_duty' | 'entering' | 'on_duty' | 'investigating' | 'going_home';

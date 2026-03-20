@@ -6,9 +6,11 @@ import { CafeWorkerAgent, NPCPersonality } from './AIAgent';
 import { TimeManager } from './TimeManager';
 import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 import { NightPoliceNPC } from '../agents/NightPoliceNPC';
+import { registerLPCAnims, playLPCAnim, velocityToDirection, getIdleFrame, LPCDirection } from './LPCSprite';
 
 export class MainScene extends Phaser.Scene {
     private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
+    private playerDir: LPCDirection = 'down'; // 玩家当前朝向
     private npc!: NPC; // 保留字段兼容旧代码引用，不再使用 SmartNPC
     private policeSystem!: PoliceNPCIntegration; // 白班警察老刘
     private nightPolice!: NightPoliceNPC;         // 夜班警察老王
@@ -72,14 +74,24 @@ export class MainScene extends Phaser.Scene {
     preload() {
         // 加载背景图、玩家角色、屋顶图和遮罩图
         this.load.image('background', 'assets/scene.png');
-        this.load.image('player', 'assets/sprites/player.png');
+        // LPC 标准精灵表：832×N，每格 64×64，13 列
+        this.load.spritesheet('player', 'assets/sprites/player.png', {
+            frameWidth:  64,
+            frameHeight: 64,
+        });
         this.load.image('roof_home', 'assets/roof_home.png');
         this.load.image('roof_store', 'assets/roof_store.png');
         this.load.image('roof_cafe', 'assets/roof_cafe.png');
         this.load.image('collision_mask', 'assets/collision_mask.png');
         this.load.image('indoor_outdoor_mask', 'assets/indoor_outdoor_mask.png');
-        this.load.image('npc_police1', 'assets/sprites/npc_police1.png');
-        this.load.image('npc_police2', 'assets/sprites/npc_police2.png');
+        this.load.spritesheet('npc_police1', 'assets/sprites/npc_police1.png', {
+            frameWidth: 64,
+            frameHeight: 64,
+        });
+        this.load.spritesheet('npc_police2', 'assets/sprites/npc_police2.png', {
+            frameWidth: 64,
+            frameHeight: 64,
+        });
     }
 
     create() {
@@ -97,6 +109,12 @@ export class MainScene extends Phaser.Scene {
         // 创建玩家角色（起始位置：世界中心 1024, 1024）
         this.player = this.physics.add.sprite(1024, 1024, 'player');
 
+        // 注册玩家 LPC 行走动画（walk = Row 8-11，每方向 9 帧）
+        registerLPCAnims(this, 'player', ['walk']);
+        // 初始静止帧：walk-down Row 10，第 0 列 = frame 130
+        this.player.setFrame(getIdleFrame('down'));
+        this.player.setScale(1.5);
+
         // 设置玩家物理属性
         this.player.setCollideWorldBounds(true);
         this.player.setBounce(0.2);
@@ -104,6 +122,13 @@ export class MainScene extends Phaser.Scene {
 
         // 设置键盘输入
         this.cursors = this.input.keyboard.createCursorKeys();
+
+        // F2 切换 NPC 调试视图（碰撞框 + 状态 + 目标线）
+        this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F2)
+            .on('down', () => {
+                NPC.debugEnabled = !NPC.debugEnabled;
+                console.log(`[调试] NPC调试: ${NPC.debugEnabled ? '✅开启' : '❌关闭'}`);
+            });
 
         // 启用相机跟随玩家
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -419,11 +444,47 @@ export class MainScene extends Phaser.Scene {
             velocityY = 160;
         }
 
-        // 检查X方向移动是否会发生碰撞
+        // 玩家脚部碰撞包围盒（角色 1.5× 放大后脚部约 28px 宽）
+        const HALF_W      = 14; // 碰撞框半宽
+        const HALF_H      = 8;  // 碰撞框半高
+        const FOOT_OFFSET = 20; // 脚部中心相对精灵中心的向下偏移
+        // 转角滑动：最大自动微调距离（逐步尝试 4/8/12px）
+        const CORNER_STEPS = [4, 8, 12];
+
+        const px = this.player.x;
+        const py = this.player.y;
+
+        // 脱困：当前嵌入碰撞区的点数
+        const currentHits = this.countCollisions(px, py, HALF_W, HALF_H, FOOT_OFFSET);
+
+        // 辅助：某位置碰撞点数
+        const hits = (nx: number, ny: number) =>
+            this.countCollisions(nx, ny, HALF_W, HALF_H, FOOT_OFFSET);
+
+        // ── X 方向 ──
         if (velocityX !== 0) {
-            const nextX = this.player.x + velocityX * 0.016; // 假设60fps
-            if (!this.checkCollisionAt(nextX, this.player.y)) {
+            const nextX    = px + velocityX * 0.016;
+            const nextHits = hits(nextX, py);
+
+            if (nextHits === 0 || (currentHits > 0 && nextHits < currentHits)) {
+                // 正常前进
                 this.player.setVelocityX(velocityX);
+            } else if (velocityY === 0) {
+                // 被挡且玩家没按 Y 键 → 尝试转角滑动（微调 Y）
+                let corrected = false;
+                for (const step of CORNER_STEPS) {
+                    if (hits(nextX, py - step) === 0) {
+                        this.player.setVelocityX(velocityX);
+                        this.player.setVelocityY(-160); // 向上滑过角
+                        corrected = true; break;
+                    }
+                    if (hits(nextX, py + step) === 0) {
+                        this.player.setVelocityX(velocityX);
+                        this.player.setVelocityY(160);  // 向下滑过角
+                        corrected = true; break;
+                    }
+                }
+                if (!corrected) this.player.setVelocityX(0);
             } else {
                 this.player.setVelocityX(0);
             }
@@ -431,16 +492,47 @@ export class MainScene extends Phaser.Scene {
             this.player.setVelocityX(0);
         }
 
-        // 检查Y方向移动是否会发生碰撞
+        // ── Y 方向 ──
         if (velocityY !== 0) {
-            const nextY = this.player.y + velocityY * 0.016;
-            if (!this.checkCollisionAt(this.player.x, nextY)) {
+            const nextY    = py + velocityY * 0.016;
+            const nextHits = hits(px, nextY);
+
+            if (nextHits === 0 || (currentHits > 0 && nextHits < currentHits)) {
                 this.player.setVelocityY(velocityY);
+            } else if (velocityX === 0) {
+                // 被挡且玩家没按 X 键 → 尝试转角滑动（微调 X）
+                let corrected = false;
+                for (const step of CORNER_STEPS) {
+                    if (hits(px - step, nextY) === 0) {
+                        this.player.setVelocityY(velocityY);
+                        this.player.setVelocityX(-160); // 向左滑过角
+                        corrected = true; break;
+                    }
+                    if (hits(px + step, nextY) === 0) {
+                        this.player.setVelocityY(velocityY);
+                        this.player.setVelocityX(160);  // 向右滑过角
+                        corrected = true; break;
+                    }
+                }
+                if (!corrected) this.player.setVelocityY(0);
             } else {
                 this.player.setVelocityY(0);
             }
         } else {
             this.player.setVelocityY(0);
+        }
+
+        // ── 玩家动画 ──
+        const vx = this.player.body.velocity.x;
+        const vy = this.player.body.velocity.y;
+        const isMoving = Math.abs(vx) > 5 || Math.abs(vy) > 5;
+
+        if (isMoving) {
+            this.playerDir = velocityToDirection(vx, vy);
+            playLPCAnim(this.player, 'player', 'walk', this.playerDir);
+        } else {
+            this.player.anims.stop();
+            this.player.setFrame(getIdleFrame(this.playerDir));
         }
 
         // 更新咖啡店员物理移动
@@ -477,6 +569,23 @@ export class MainScene extends Phaser.Scene {
         
         // 更新时间系统
         this.timeManager.update();
+    }
+
+    /**
+     * 统计脚部包围盒内碰撞点数量（0~4）。
+     * 用于玩家多点碰撞检测和脱困判断。
+     */
+    private countCollisions(
+        x: number, y: number,
+        halfW: number, halfH: number, footOffsetY: number
+    ): number {
+        const fy = y + footOffsetY;
+        return (
+            (this.checkCollisionAt(x - halfW, fy - halfH) ? 1 : 0) +
+            (this.checkCollisionAt(x + halfW, fy - halfH) ? 1 : 0) +
+            (this.checkCollisionAt(x - halfW, fy + halfH) ? 1 : 0) +
+            (this.checkCollisionAt(x + halfW, fy + halfH) ? 1 : 0)
+        );
     }
 
     private checkCollisionAt(x: number, y: number): boolean {
