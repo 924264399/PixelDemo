@@ -275,8 +275,8 @@ export class NightPoliceNPC {
         const hasHistory = history.length > 0;
 
         const trigger = hasHistory
-            ? '[GREETING] 玩家又来找你说话了。你们之前聊过，你记得那些对话。根据之前的内容，简短自然地开口，可以提到之前说的事。不要说"上次"，自然融入。只输出你说的话，不超过2句，不超过25字。'
-            : '[GREETING] 玩家第一次来找你说话。你是正在夜巡的民警，简短冷静地开口。只输出你说的话，不超过2句，不超过20字。';
+            ? '玩家又来了，简短自然招呼，可带之前话题，勿说"上次"。2句内，25字内。'
+            : '玩家第一次来，夜巡民警简短冷静开口。2句内，20字内。';
 
         try {
             const systemPrompt = buildNPCPrompt(
@@ -284,9 +284,7 @@ export class NightPoliceNPC {
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
             return response ?? this.getFallbackGreeting(hasHistory);
         } catch {
             return this.getFallbackGreeting(hasHistory);

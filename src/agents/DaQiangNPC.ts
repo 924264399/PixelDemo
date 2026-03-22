@@ -162,8 +162,8 @@ export class DaQiangNPC {
         const hasHistory = history.length > 0;
 
         const trigger = hasHistory
-            ? '[GREETING] 李家妹子又来了。你们聊过，自然地打个招呼，可以带点调侃或提起上次的话题。只输出你说的话，不超过2句，不超过30字。'
-            : '[GREETING] 李家妹子第一次进咖啡馆。作为老板自然地打招呼。只输出你说的话，不超过2句，不超过30字。';
+            ? '李家妹子又来了，自然招呼，可带调侃或上次话题。2句内，30字内。'
+            : '李家妹子第一次来，自然招呼。2句内，30字内。';
 
         try {
             const systemPrompt = buildNPCPrompt(
@@ -171,9 +171,7 @@ export class DaQiangNPC {
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
             return response ?? this.getFallbackGreeting(hasHistory);
         } catch {
             return this.getFallbackGreeting(hasHistory);

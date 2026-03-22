@@ -146,8 +146,8 @@ export class ZhangShenNPC {
         const hasHistory = history.length > 0;
 
         const trigger = hasHistory
-            ? '[GREETING] 李家妹子又来了。你们聊过，自然地打招呼，可以提起上次的话题。只输出你说的话，不超过2句，不超过30字。'
-            : '[GREETING] 李家妹子第一次来便利店。作为老板娘自然热情地招呼她。只输出你说的话，不超过2句，不超过30字。';
+            ? '李家妹子又来了，自然打招呼，可带上次话题。2句内，30字内。'
+            : '李家妹子第一次来，热情招呼。2句内，30字内。';
 
         try {
             const systemPrompt = buildNPCPrompt(
@@ -155,10 +155,7 @@ export class ZhangShenNPC {
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
-            // 开场白不污染对话历史
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
             return response ?? this.getFallbackGreeting(hasHistory);
         } catch {
             return this.getFallbackGreeting(hasHistory);

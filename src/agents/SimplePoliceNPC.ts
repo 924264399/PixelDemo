@@ -348,8 +348,8 @@ export class SimplePoliceNPC {
         const hasHistory = history.length > 0;
 
         const trigger = hasHistory
-            ? '[GREETING] 玩家又来找你说话了。你们之前聊过，你记得那些对话。根据你们的关系和上次聊的内容，自然地开口打个招呼，可以提及上次聊的事，也可以说说你现在在干嘛。不要说"上次"这两个字，自然融入即可。只输出你说的话，不超过2句，不超过30字。'
-            : '[GREETING] 玩家第一次来找你说话。作为正在巡逻的民警，自然地开口。只输出你说的话，不超过2句，不超过30字。';
+            ? '玩家又来了，自然招呼，可带上次话题，勿说"上次"。2句内，30字内。'
+            : '玩家第一次来，巡逻中的民警自然开口。2句内，30字内。';
 
         try {
             const systemPrompt = buildNPCPrompt(
@@ -357,9 +357,7 @@ export class SimplePoliceNPC {
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
             return response ?? this.getFallbackGreeting(hasHistory);
         } catch {
             return this.getFallbackGreeting(hasHistory);

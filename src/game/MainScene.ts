@@ -1084,6 +1084,7 @@ export class MainScene extends Phaser.Scene {
      * 🚀 开始对话 - 支持不同NPC类型
      */
     private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' | null = null;
+    private greetingPending = false; // 开场白是否还在等待中（玩家发消息后应忽略）
 
     // ── 移动调试 ──
     private moveDebugEnabled = false;
@@ -1139,25 +1140,39 @@ export class MainScene extends Phaser.Scene {
         this.chatHistory = [];
         this.chatScrollOffset = 0;
         
+        this.greetingPending = true; // 开场白开始，标记为等待中
+
         if (npcType === 'police') {
             this.addChatMessage('民警老刘', '（走过来）');
             this.policeSystem?.getPoliceOfficer?.()?.generateGreeting().then((greeting: string) => {
-                this.replaceLastMessage('民警老刘', greeting);
+                if (this.greetingPending) { // 玩家还没发消息，安全替换
+                    this.replaceLastMessage('民警老刘', greeting);
+                    this.greetingPending = false;
+                }
             });
         } else if (npcType === 'wang') {
             this.addChatMessage('民警老王', '（抬起头）');
             this.nightPolice?.generateGreeting().then((greeting: string) => {
-                this.replaceLastMessage('民警老王', greeting);
+                if (this.greetingPending) {
+                    this.replaceLastMessage('民警老王', greeting);
+                    this.greetingPending = false;
+                }
             });
         } else if (npcType === 'zhang') {
             this.addChatMessage('张婶', '（抬头看门口）');
             this.zhangShen?.generateGreeting().then((greeting: string) => {
-                this.replaceLastMessage('张婶', greeting);
+                if (this.greetingPending) {
+                    this.replaceLastMessage('张婶', greeting);
+                    this.greetingPending = false;
+                }
             });
         } else if (npcType === 'daqiang') {
             this.addChatMessage('大强', '（抬起头）');
             this.daQiang?.generateGreeting().then((greeting: string) => {
-                this.replaceLastMessage('大强', greeting);
+                if (this.greetingPending) {
+                    this.replaceLastMessage('大强', greeting);
+                    this.greetingPending = false;
+                }
             });
         }
         
@@ -1178,6 +1193,7 @@ export class MainScene extends Phaser.Scene {
     private endDialog(): void {
         console.log('💬 结束对话');
         this.isInDialogMode = false;
+        this.greetingPending = false; // 确保下次对话标志位干净
         
         // 独立隐藏每个元素
         this.dialogBox.setVisible(false);
@@ -1228,7 +1244,10 @@ export class MainScene extends Phaser.Scene {
      */
     private async sendMessage(message: string): Promise<void> {
         console.log(`📤 玩家: ${message}`);
-        
+
+        // 玩家发消息，开场白即使还没回来也不再覆盖聊天记录
+        this.greetingPending = false;
+
         // 立即添加玩家消息到聊天记录
         this.addChatMessage('你', message);
         

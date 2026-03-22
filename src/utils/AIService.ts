@@ -54,22 +54,44 @@ export class AIAPIClient {
     //   'low'（气泡/八卦）→ 正常追加到队尾
     private requestQueue: Array<{ task: () => Promise<void>; priority: 'high' | 'low' }> = [];
     private isProcessingQueue = false;
+    private currentTaskPriority: 'high' | 'low' | null = null; // 当前正在执行的任务优先级
+    private currentRequestController: AbortController | null = null; // 当前 HTTP 请求的 abort 控制器
 
     // 全局对话冻结开关：对话期间所有 low 请求直接丢弃，不入队
     private frozen = false;
 
-    /** 进入对话时冻结：清空队列中所有 low 任务，后续 low 请求直接丢弃 */
+    /** 进入对话时冻结：清空队列中所有 low 任务，并 abort 当前正在跑的 low 任务 */
     freeze(): void {
         this.frozen = true;
         const before = this.requestQueue.length;
         this.requestQueue = this.requestQueue.filter(item => item.priority === 'high');
-        console.log(`🧊 AI全局冻结，清除 ${before - this.requestQueue.length} 个low任务`);
+        const cleared = before - this.requestQueue.length;
+        // 如果当前有 low 任务正在执行 HTTP 请求，立刻 abort 它
+        if (this.currentTaskPriority === 'low' && this.currentRequestController) {
+            this.currentRequestController.abort();
+            console.log(`🧊 AI全局冻结，清除 ${cleared} 个low任务，abort 当前low请求`);
+        } else {
+            console.log(`🧊 AI全局冻结，清除 ${cleared} 个low任务`);
+        }
     }
 
     /** 对话结束时解冻：后续 low 请求恢复正常排队 */
     unfreeze(): void {
         this.frozen = false;
         console.log(`🔥 AI全局解冻，后台任务恢复`);
+    }
+
+    /**
+     * 直接发出请求，完全绕开队列（专供开场白使用）。
+     * 与队列并发执行，不占队列位置，不阻塞玩家消息。
+     * frozen 状态对此无影响。
+     */
+    async directRequest(messages: AIMessage[], options?: { temperature?: number; maxTokens?: number }): Promise<AIResponse> {
+        if (!this.config.apiKey || this.config.apiKey === 'your-api-key-here') {
+            return { success: false, error: 'API密钥未配置或无效' };
+        }
+        // 默认给开场白更大的 token 预算，避免被截断
+        return this.executeRequest(messages, { maxTokens: 300, ...options });
     }
 
     private constructor() {
@@ -79,7 +101,7 @@ export class AIAPIClient {
             apiKey: this.getEnvVar('AI_API_KEY') || '',
             model: this.getEnvVar('AI_MODEL') || 'deepseek/deepseek-v3',
             temperature: 0.8,
-            maxTokens: 200,  // NPC回复极短，200足够，减少等待时间
+            maxTokens: 300,  // 给回复足够空间，避免 length 截断
             timeout: 20000   // 超时20s，给网络足够余量
         };
 
@@ -175,8 +197,11 @@ export class AIAPIClient {
 
         while (this.requestQueue.length > 0) {
             const { task, priority } = this.requestQueue.shift()!;
+            this.currentTaskPriority = priority;
             console.log(`🔄 执行请求 priority=${priority}，剩余队列: ${this.requestQueue.length}`);
             await task();
+            this.currentTaskPriority = null;
+            this.currentRequestController = null;
             // 请求之间保留最短间隔，避免触发限流
             const gap = this.MIN_REQUEST_INTERVAL - (Date.now() - this.lastRequestTime);
             if (gap > 0) await this.sleep(gap);
@@ -205,7 +230,14 @@ export class AIAPIClient {
             const response = await this.makeRequest(requestData);
 
             if (response.choices && response.choices[0]) {
-                const content = response.choices[0].message?.content || '';
+                const finishReason = response.choices[0].finish_reason;
+                const content = (response.choices[0].message?.content ?? '').trim();
+                console.log(`📨 API原始内容: "${content.slice(0, 50)}${content.length > 50 ? '...' : ''}", finish_reason: ${finishReason}`);
+                // length 表示被截断，直接当失败处理（避免返回半截内容）
+                if (finishReason === 'length') {
+                    console.warn(`⚠️ 回复被截断(length)，增大 maxTokens 或缩短 prompt`);
+                    return { success: false, error: 'truncated' };
+                }
                 const usage = response.usage;
                 const estimatedCost = this.calculateCost(usage);
                 this.totalCost += estimatedCost;
@@ -231,6 +263,7 @@ export class AIAPIClient {
      */
     private async makeRequest(data: any): Promise<any> {
         const controller = new AbortController();
+        this.currentRequestController = controller; // 暴露给 freeze() 使用
         const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
         try {
@@ -377,16 +410,45 @@ export class NPCAIAssistant {
             _priority: priority,
         } as any);
 
-        if (response.success && response.content) {
-            // 更新对话历史
-            this.addToHistory('user', playerMessage);
-            this.addToHistory('assistant', response.content);
-
-            console.log(`💬 ${this.npcId} AI回复:`, response.content);
-            return response.content;
+        if (response.success && response.content != null) {
+            const content = response.content.trim();
+            if (content) {
+                // 更新对话历史
+                this.addToHistory('user', playerMessage);
+                this.addToHistory('assistant', content);
+                console.log(`💬 ${this.npcId} AI回复:`, content);
+                return content;
+            }
         }
 
-        console.warn(`⚠️  ${this.npcId} AI对话失败，使用降级回复`);
+        console.warn(`⚠️  ${this.npcId} AI对话失败(error=${response.error})，使用降级回复`);
+        return null;
+    }
+
+    /**
+     * 直接发出（绕开队列），专供开场白使用。
+     * 不写入历史（调用方负责 slice(0,-2) 清理），不受 frozen 影响。
+     */
+    async handleConversationDirect(
+        systemPrompt: string,
+        playerMessage: string,
+    ): Promise<string | null> {
+        const messages: AIMessage[] = [
+            { role: 'system', content: systemPrompt },
+            ...this.conversationHistory,
+            { role: 'user', content: playerMessage }
+        ];
+
+        const response = await this.client.directRequest(messages, { temperature: 0.8 });
+
+        if (response.success && response.content != null) {
+            const content = response.content.trim();
+            if (content) {
+                console.log(`👋 ${this.npcId} 开场白:`, content);
+                return content;
+            }
+        }
+        console.warn(`⚠️  ${this.npcId} 开场白失败(error=${response.error})`);
         return null;
     }
 
