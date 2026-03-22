@@ -353,7 +353,9 @@ export class SimplePoliceNPC {
 
         try {
             const systemPrompt = buildNPCPrompt(
-`你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。东北口语，说话简短有执勤感。`
+`你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。东北口语，说话简短有执勤感。`,
+                this.timeManager.getHour(),
+                this.timeManager.getMinute()
             );
             const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
             // 开场白不计入正式对话历史（避免污染上下文）
@@ -392,7 +394,9 @@ export class SimplePoliceNPC {
 5. 遇到问题先问"咋回事儿"，再给建议。
 6. 不废话，说完就完，不总结，不抒情。
 
-【禁忌】不写长段，不写文章，不说镇子以外的地方。`
+【禁忌】不写长段，不写文章，不说镇子以外的地方。`,
+                this.timeManager.getHour(),
+                this.timeManager.getMinute()
             );
 
             const response = await this.aiAssistant.handleConversation(

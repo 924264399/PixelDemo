@@ -276,7 +276,9 @@ export class NightPoliceNPC {
 
         try {
             const systemPrompt = buildNPCPrompt(
-`你是老王（王大春），47岁，哑巴镇夜班社区民警。话少，东北口语，冷静克制。`
+`你是老王（王大春），47岁，哑巴镇夜班社区民警。话少，东北口语，冷静克制。`,
+                this.timeManager.getHour(),
+                this.timeManager.getMinute()
             );
             const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
             // 移除 [GREETING] 触发，不污染正式对话历史
@@ -316,7 +318,9 @@ export class NightPoliceNPC {
 5. 对玩家叫"李家妹子"，语气简短但不失亲切。
 6. 遇到异常情况（如有人鬼鬼祟祟）反应敏锐，立刻追问细节。
 
-【禁忌】不写长段，不抒情，不废话，不说镇子以外的地方。` + handoffContext
+【禁忌】不写长段，不抒情，不废话，不说镇子以外的地方。` + handoffContext,
+                this.timeManager.getHour(),
+                this.timeManager.getMinute()
             );
 
             const response = await this.aiAssistant.handleConversation(
@@ -357,8 +361,9 @@ export class NightPoliceNPC {
 只回复行动名称，不要其他内容。`
             );
 
-            const currentHour = new Date().getHours();
-            const context = `当前时间：${currentHour}:00，夜班执勤中，请选择行动`;
+            const currentHour = this.timeManager.getHour();
+            const currentMinute = this.timeManager.getMinute();
+            const context = `当前游戏时间：${currentHour.toString().padStart(2,'0')}:${currentMinute.toString().padStart(2,'0')}，夜班执勤中，请选择行动`;
 
             const decision = await this.aiAssistant.makeDecision(systemPrompt, context);
             this.executeDecision(decision?.trim().toLowerCase() ?? 'patrol');

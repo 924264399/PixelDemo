@@ -37,11 +37,19 @@ export const TOWN_CONTEXT = `
  * 构建完整的 NPC system prompt
  * 
  * 用法：
- *   const systemPrompt = buildNPCPrompt(老刘的人设字符串);
+ *   const systemPrompt = buildNPCPrompt(老刘的人设字符串, 10, 30);
  * 
  * @param npcPersonality - NPC 的个人人设描述（角色、性格、说话风格等）
- * @returns 完整的 system prompt（世界观 + 人设）
+ * @param gameHour       - 当前游戏小时（0-23），可选
+ * @param gameMinute     - 当前游戏分钟（0-59），可选
+ * @returns 完整的 system prompt（世界观 + 人设 + 当前时间）
  */
-export function buildNPCPrompt(npcPersonality: string): string {
-    return `${TOWN_CONTEXT}\n\n【你的身份与人设】\n${npcPersonality}`;
+export function buildNPCPrompt(npcPersonality: string, gameHour?: number, gameMinute?: number): string {
+    let timeInfo = '';
+    if (gameHour !== undefined && gameMinute !== undefined) {
+        const hh = gameHour.toString().padStart(2, '0');
+        const mm = gameMinute.toString().padStart(2, '0');
+        timeInfo = `\n\n【当前游戏时间】\n现在是 ${hh}:${mm}，请根据这个时间来判断是白天还是夜晚、你应该在做什么、以及跟玩家说话时的语气和内容。`;
+    }
+    return `${TOWN_CONTEXT}\n\n【你的身份与人设】\n${npcPersonality}${timeInfo}`;
 }
