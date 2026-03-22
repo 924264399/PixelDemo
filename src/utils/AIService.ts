@@ -46,7 +46,6 @@ export class AIAPIClient {
     private requestCount = 0;
     private totalCost = 0;
     private lastRequestTime = 0;
-    private readonly MIN_REQUEST_INTERVAL = 500; // 各请求间最短间隔（ms）
     private retryAfter = 0; // 429错误后的等待时间
 
     // 全局串行队列：同一时间只有 1 个 LLM 请求在跑
@@ -99,7 +98,7 @@ export class AIAPIClient {
         this.config = {
             endpoint: this.getEnvVar('AI_API_ENDPOINT') || 'https://api.qnaigc.com/v1/chat/completions',
             apiKey: this.getEnvVar('AI_API_KEY') || '',
-            model: this.getEnvVar('AI_MODEL') || 'deepseek/deepseek-v3',
+            model: this.getEnvVar('AI_MODEL') || 'gpt-oss-20b',
             temperature: 0.8,
             maxTokens: 300,  // 给回复足够空间，避免 length 截断
             timeout: 20000   // 超时20s，给网络足够余量
@@ -202,9 +201,11 @@ export class AIAPIClient {
             await task();
             this.currentTaskPriority = null;
             this.currentRequestController = null;
-            // 请求之间保留最短间隔，避免触发限流
-            const gap = this.MIN_REQUEST_INTERVAL - (Date.now() - this.lastRequestTime);
-            if (gap > 0) await this.sleep(gap);
+            // low 任务之间保留 500ms 间隔，防止频繁触发；high 任务无间隔
+            if (priority === 'low') {
+                const gap = 500 - (Date.now() - this.lastRequestTime);
+                if (gap > 0) await this.sleep(gap);
+            }
         }
 
         this.isProcessingQueue = false;

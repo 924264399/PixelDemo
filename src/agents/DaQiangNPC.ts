@@ -157,25 +157,9 @@ export class DaQiangNPC {
 
     // ── 对话接口 ──────────────────────────────────────────────
 
-    async generateGreeting(): Promise<string> {
-        const history = this.aiAssistant.getHistory();
-        const hasHistory = history.length > 0;
-
-        const trigger = hasHistory
-            ? '李家妹子又来了，自然招呼，可带调侃或上次话题。2句内，30字内。'
-            : '李家妹子第一次来，自然招呼。2句内，30字内。';
-
-        try {
-            const systemPrompt = buildNPCPrompt(
-                this.buildPersonality(),
-                this.timeManager.getHour(),
-                this.timeManager.getMinute()
-            );
-            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
-            return response ?? this.getFallbackGreeting(hasHistory);
-        } catch {
-            return this.getFallbackGreeting(hasHistory);
-        }
+    generateGreeting(): string {
+        const hasHistory = this.aiAssistant.getHistory().length > 0;
+        return this.getFallbackGreeting(hasHistory);
     }
 
     async handleConversation(playerMessage: string): Promise<string> {
@@ -215,10 +199,22 @@ export class DaQiangNPC {
 
     private getFallbackGreeting(hasHistory: boolean): string {
         if (hasHistory) {
-            const opts = ['又来了，还是老样子？', '进来坐，咖啡刚好。', '哟，常客了。'];
+            const opts = [
+                '又来了，还是老样子？',
+                '进来坐，咖啡刚好。',
+                '哟，常客了。',
+                '来了，今天喝点啥？',
+                '坐吧，我给你整一杯。',
+            ];
             return opts[Math.floor(Math.random() * opts.length)];
         }
-        const opts = ['进来坐，要点啥？', '欢迎，咖啡馆，随便看。', '哟，新面孔，稀罕。'];
+        const opts = [
+            '进来坐，要点啥？',
+            '哟，新面孔，稀罕。',
+            '欢迎，随便看。',
+            '李家妹子？头回来吧，坐。',
+            '进来进来，今天有手冲。',
+        ];
         return opts[Math.floor(Math.random() * opts.length)];
     }
 

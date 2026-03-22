@@ -141,25 +141,9 @@ export class ZhangShenNPC {
     /**
      * 生成开场白（玩家靠近按E时触发）
      */
-    async generateGreeting(): Promise<string> {
-        const history = this.aiAssistant.getHistory();
-        const hasHistory = history.length > 0;
-
-        const trigger = hasHistory
-            ? '李家妹子又来了，自然打招呼，可带上次话题。2句内，30字内。'
-            : '李家妹子第一次来，热情招呼。2句内，30字内。';
-
-        try {
-            const systemPrompt = buildNPCPrompt(
-                this.buildPersonality(),
-                this.timeManager.getHour(),
-                this.timeManager.getMinute()
-            );
-            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
-            return response ?? this.getFallbackGreeting(hasHistory);
-        } catch {
-            return this.getFallbackGreeting(hasHistory);
-        }
+    generateGreeting(): string {
+        const hasHistory = this.aiAssistant.getHistory().length > 0;
+        return this.getFallbackGreeting(hasHistory);
     }
 
     // 本轮对话中最有价值的一句（关闭对话后用于八卦加工）
@@ -233,19 +217,7 @@ export class ZhangShenNPC {
     // ── 内部方法 ──
 
     private buildPersonality(): string {
-        return `你是张婶（张秀珍），50岁，哑巴镇利民便利店老板娘，在这开了二十多年小卖部。
-东北老娘们儿，嗓门儿大，爱唠嗑，热心肠，消息灵通，谁家鸡毛蒜皮都门儿清。
-现在在便利店里看店，在收银台和货架之间溜达，有顾客来了热情招呼。
-
-【说话规则——必须严格遵守】
-1. 每次回复最多3句话，不超过60个字，一句一行。
-2. 东北口语，多用：哎哟、咋了、整啥、嗯哪、可不是咋地、得了、唠啥、这不、你说这。
-3. 爱"接茬"：玩家说啥都能扯到镇上的人或事，绕半圈儿再回来。
-4. 偶尔主动爆料："你不知道吧，我听说……"或"这事儿我早知道！"
-5. 对玩家叫"李家妹子"或"妹子"，像邻居大妈那种亲热劲儿。
-6. 聊到商品时顺带推销一下（冻梨、大西瓜、酱油醋等）。
-
-【禁忌】不写长段，不说镇子以外的事，不抒情。`;
+        return `你是张婶，50岁，便利店老板娘，东北大妈，嗓门大，热心，爱八卦，消息灵通。回复规则：最多3句，60字内，一句一行，东北口语（哎哟/咋了/嗯哪/可不是咋地），叫玩家"妹子"，偶尔扯镇上人事，偶尔推销商品（冻梨/酱油/大西瓜）。禁止长段、抒情。`;
     }
 
     private getFallbackGreeting(hasHistory: boolean): string {

@@ -343,25 +343,9 @@ export class SimplePoliceNPC {
      * 生成 LLM 开场白（基于历史上下文）
      * 传入特殊触发词 [GREETING]，NPC 根据之前对话历史决定说什么
      */
-    async generateGreeting(): Promise<string> {
-        const history = this.aiAssistant.getHistory();
-        const hasHistory = history.length > 0;
-
-        const trigger = hasHistory
-            ? '玩家又来了，自然招呼，可带上次话题，勿说"上次"。2句内，30字内。'
-            : '玩家第一次来，巡逻中的民警自然开口。2句内，30字内。';
-
-        try {
-            const systemPrompt = buildNPCPrompt(
-                this.buildPersonality(),
-                this.timeManager.getHour(),
-                this.timeManager.getMinute()
-            );
-            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
-            return response ?? this.getFallbackGreeting(hasHistory);
-        } catch {
-            return this.getFallbackGreeting(hasHistory);
-        }
+    generateGreeting(): string {
+        const hasHistory = this.aiAssistant.getHistory().length > 0;
+        return this.getFallbackGreeting(hasHistory);
     }
 
     private buildPersonality(): string {
@@ -383,10 +367,22 @@ export class SimplePoliceNPC {
 
     private getFallbackGreeting(hasHistory: boolean): string {
         if (hasHistory) {
-            const opts = ['又来了，有事儿？', '咋了，有情况？', '说吧，听着呢。'];
+            const opts = [
+                '又来了，有事儿说吧。',
+                '咋了，有情况？',
+                '说吧，我听着呢。',
+                '又碰上了，有啥事儿？',
+                '巡逻路上碰见你了，咋了？',
+            ];
             return opts[Math.floor(Math.random() * opts.length)];
         }
-        const opts = ['哎，李家妹子，咋了？', '正巡逻呢，有事儿说。', '咋了这是？'];
+        const opts = [
+            '哎，李家妹子，咋了？',
+            '正巡逻呢，有事儿说。',
+            '李家妹子，锁好门了吗？',
+            '咋了，有啥事儿找我？',
+            '哎，有事儿？说吧。',
+        ];
         return opts[Math.floor(Math.random() * opts.length)];
     }
 

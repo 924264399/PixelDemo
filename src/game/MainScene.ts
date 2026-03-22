@@ -1140,40 +1140,20 @@ export class MainScene extends Phaser.Scene {
         this.chatHistory = [];
         this.chatScrollOffset = 0;
         
-        this.greetingPending = true; // 开场白开始，标记为等待中
+        this.greetingPending = false; // 硬编码开场白立刻显示，无需等待
 
         if (npcType === 'police') {
-            this.addChatMessage('民警老刘', '（走过来）');
-            this.policeSystem?.getPoliceOfficer?.()?.generateGreeting().then((greeting: string) => {
-                if (this.greetingPending) { // 玩家还没发消息，安全替换
-                    this.replaceLastMessage('民警老刘', greeting);
-                    this.greetingPending = false;
-                }
-            });
+            const greeting = this.policeSystem?.getPoliceOfficer?.()?.generateGreeting() ?? '有啥事儿？';
+            this.addChatMessage('民警老刘', greeting);
         } else if (npcType === 'wang') {
-            this.addChatMessage('民警老王', '（抬起头）');
-            this.nightPolice?.generateGreeting().then((greeting: string) => {
-                if (this.greetingPending) {
-                    this.replaceLastMessage('民警老王', greeting);
-                    this.greetingPending = false;
-                }
-            });
+            const greeting = this.nightPolice?.generateGreeting() ?? '说。';
+            this.addChatMessage('民警老王', greeting);
         } else if (npcType === 'zhang') {
-            this.addChatMessage('张婶', '（抬头看门口）');
-            this.zhangShen?.generateGreeting().then((greeting: string) => {
-                if (this.greetingPending) {
-                    this.replaceLastMessage('张婶', greeting);
-                    this.greetingPending = false;
-                }
-            });
+            const greeting = this.zhangShen?.generateGreeting() ?? '哎哟，来了！';
+            this.addChatMessage('张婶', greeting);
         } else if (npcType === 'daqiang') {
-            this.addChatMessage('大强', '（抬起头）');
-            this.daQiang?.generateGreeting().then((greeting: string) => {
-                if (this.greetingPending) {
-                    this.replaceLastMessage('大强', greeting);
-                    this.greetingPending = false;
-                }
-            });
+            const greeting = this.daQiang?.generateGreeting() ?? '进来坐。';
+            this.addChatMessage('大强', greeting);
         }
         
         // 重置输入

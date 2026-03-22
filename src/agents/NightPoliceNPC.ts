@@ -270,25 +270,9 @@ export class NightPoliceNPC {
         this.thoughtBubble.show('🔄 收到交接...', 3000);
     }
 
-    async generateGreeting(): Promise<string> {
-        const history = this.aiAssistant.getHistory();
-        const hasHistory = history.length > 0;
-
-        const trigger = hasHistory
-            ? '玩家又来了，简短自然招呼，可带之前话题，勿说"上次"。2句内，25字内。'
-            : '玩家第一次来，夜巡民警简短冷静开口。2句内，20字内。';
-
-        try {
-            const systemPrompt = buildNPCPrompt(
-                this.buildPersonality(),
-                this.timeManager.getHour(),
-                this.timeManager.getMinute()
-            );
-            const response = await this.aiAssistant.handleConversationDirect(systemPrompt, trigger);
-            return response ?? this.getFallbackGreeting(hasHistory);
-        } catch {
-            return this.getFallbackGreeting(hasHistory);
-        }
+    generateGreeting(): string {
+        const hasHistory = this.aiAssistant.getHistory().length > 0;
+        return this.getFallbackGreeting(hasHistory);
     }
 
     private buildPersonality(): string {
@@ -312,10 +296,22 @@ export class NightPoliceNPC {
 
     private getFallbackGreeting(hasHistory: boolean): string {
         if (hasHistory) {
-            const opts = ['又有事儿？', '说。', '咋了？'];
+            const opts = [
+                '又来了，咋了？',
+                '说吧。',
+                '有事儿？',
+                '夜里还没睡，有情况？',
+                '嗯，说。',
+            ];
             return opts[Math.floor(Math.random() * opts.length)];
         }
-        const opts = ['嗯。\n有事儿？', '夜里咋还在外头？', '说。'];
+        const opts = [
+            '嗯。有事儿？',
+            '夜里咋还在外头？',
+            '说。',
+            '这旮旯不太平，有啥事儿？',
+            '深更半夜的，咋了？',
+        ];
         return opts[Math.floor(Math.random() * opts.length)];
     }
 
