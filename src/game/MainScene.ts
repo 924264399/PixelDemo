@@ -7,6 +7,7 @@ import { TimeManager } from './TimeManager';
 import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 import { NightPoliceNPC } from '../agents/NightPoliceNPC';
 import { ZhangShenNPC } from '../agents/ZhangShenNPC';
+import { DaQiangNPC } from '../agents/DaQiangNPC';
 import { registerLPCAnims, playLPCAnim, velocityToDirection, getIdleFrame, LPCDirection } from './LPCSprite';
 
 export class MainScene extends Phaser.Scene {
@@ -16,6 +17,7 @@ export class MainScene extends Phaser.Scene {
     private policeSystem!: PoliceNPCIntegration; // 白班警察老刘
     private nightPolice!: NightPoliceNPC;         // 夜班警察老王
     private zhangShen!: ZhangShenNPC;             // 张婶（便利店）
+    private daQiang!: DaQiangNPC;                 // 大强（咖啡馆）
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
     private background!: Phaser.GameObjects.TileSprite;
 
@@ -95,6 +97,10 @@ export class MainScene extends Phaser.Scene {
             frameHeight: 64,
         });
         this.load.spritesheet('npc_zhangshen', 'assets/sprites/npc_zhangshen.png', {
+            frameWidth: 64,
+            frameHeight: 64,
+        });
+        this.load.spritesheet('npc_daqiang', 'assets/sprites/npc_daqiang.png', {
             frameWidth: 64,
             frameHeight: 64,
         });
@@ -206,6 +212,14 @@ export class MainScene extends Phaser.Scene {
             console.log('✅ 张婶已上岗！');
         } catch (error) {
             console.error('张婶初始化失败，但游戏继续运行:', error);
+        }
+
+        try {
+            this.daQiang = new DaQiangNPC(this, this.timeManager);
+            this.daQiang.getNPC().setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
+            console.log('☕ 大强已上岗！');
+        } catch (error) {
+            console.error('大强初始化失败，但游戏继续运行:', error);
         }
     }
 
@@ -627,6 +641,11 @@ export class MainScene extends Phaser.Scene {
                 this.zhangShen.update(delta);
                 this.zhangShen.getNPC().update();
             }
+
+            if (this.daQiang) {
+                this.daQiang.update(delta);
+                this.daQiang.getNPC().update();
+            }
         } catch (error) {
             // 静默处理
         }
@@ -995,11 +1014,22 @@ export class MainScene extends Phaser.Scene {
                 );
             }
 
+            // 检查玩家是否靠近大强
+            let distanceToDaQiang = Infinity;
+            const daQiangNPC = this.daQiang?.getNPC();
+            if (daQiangNPC) {
+                distanceToDaQiang = Phaser.Math.Distance.Between(
+                    this.player.x, this.player.y,
+                    daQiangNPC.x, daQiangNPC.y
+                );
+            }
+
             const isNearNPC = distanceToNPC < 80;
             const isNearPolice = distanceToPolice < 80;
             const isNearWang = distanceToWang < 80;
             const isNearZhang = distanceToZhang < 80;
-            const isNear = isNearNPC || isNearPolice || isNearWang || isNearZhang;
+            const isNearDaQiang = distanceToDaQiang < 80;
+            const isNear = isNearNPC || isNearPolice || isNearWang || isNearZhang || isNearDaQiang;
 
             if (isNear && !this.isNearNPC) {
                 this.isNearNPC = true;
@@ -1010,13 +1040,15 @@ export class MainScene extends Phaser.Scene {
             // 检查是否按下E键
             if (this.isNearNPC && Phaser.Input.Keyboard.JustDown(this.eKey)) {
                 // 找最近的 NPC 对话
-                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC, distanceToZhang);
+                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC, distanceToZhang, distanceToDaQiang);
                 if (isNearPolice && distanceToPolice === minDist) {
                     this.startDialog('police');
                 } else if (isNearWang && distanceToWang === minDist) {
                     this.startDialog('wang');
                 } else if (isNearZhang && distanceToZhang === minDist) {
                     this.startDialog('zhang');
+                } else if (isNearDaQiang && distanceToDaQiang === minDist) {
+                    this.startDialog('daqiang');
                 } else if (isNearNPC) {
                     this.startDialog('npc');
                 }
@@ -1050,7 +1082,7 @@ export class MainScene extends Phaser.Scene {
     /**
      * 🚀 开始对话 - 支持不同NPC类型
      */
-    private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | null = null;
+    private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' | null = null;
 
     // ── 移动调试 ──
     private moveDebugEnabled = false;
@@ -1064,7 +1096,7 @@ export class MainScene extends Phaser.Scene {
         px: 0, py: 0,
     };
     
-    private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' = 'npc'): void {
+    private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' = 'npc'): void {
         this.currentDialogNPC = npcType;
         
         const px = this.player.x;
@@ -1082,8 +1114,12 @@ export class MainScene extends Phaser.Scene {
             console.log('🛒 开始与张婶对话');
             this.zhangShen?.pausePatrol();
             this.zhangShen?.getNPC()?.faceToward(px, py);
+        } else if (npcType === 'daqiang') {
+            console.log('☕ 开始与大强对话');
+            this.daQiang?.pausePatrol();
+            this.daQiang?.getNPC()?.faceToward(px, py);
         } else {
-            console.log('� 开始与NPC对话');
+            console.log('💬 开始与NPC对话');
         }
 
         this.isInDialogMode = true;
@@ -1113,6 +1149,11 @@ export class MainScene extends Phaser.Scene {
             this.addChatMessage('张婶', '（抬头看门口）');
             this.zhangShen?.generateGreeting().then((greeting: string) => {
                 this.replaceLastMessage('张婶', greeting);
+            });
+        } else if (npcType === 'daqiang') {
+            this.addChatMessage('大强', '（抬起头）');
+            this.daQiang?.generateGreeting().then((greeting: string) => {
+                this.replaceLastMessage('大强', greeting);
             });
         }
         
@@ -1157,6 +1198,9 @@ export class MainScene extends Phaser.Scene {
         } else if (this.currentDialogNPC === 'zhang') {
             this.zhangShen?.resumePatrol();
             this.zhangShen?.getNPC()?.restoreDirection();
+        } else if (this.currentDialogNPC === 'daqiang') {
+            this.daQiang?.resumePatrol();
+            this.daQiang?.getNPC()?.restoreDirection();
         }
         this.currentDialogNPC = null;
     }
@@ -1210,6 +1254,16 @@ export class MainScene extends Phaser.Scene {
             } catch (error) {
                 console.error('张婶AI对话失败:', error);
                 this.replaceLastMessage('张婶', '哎哟，这咋整了，你再说一遍？');
+            }
+        } else if (this.currentDialogNPC === 'daqiang') {
+            // 与大强对话
+            this.addChatMessage('大强', '（想了想）');
+            try {
+                const response = await this.daQiang.handleConversation(message);
+                this.replaceLastMessage('大强', response);
+            } catch (error) {
+                console.error('大强AI对话失败:', error);
+                this.replaceLastMessage('大强', '哎，走神了，你说啥来着？');
             }
         }
     }
