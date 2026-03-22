@@ -8,6 +8,7 @@ import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 import { NightPoliceNPC } from '../agents/NightPoliceNPC';
 import { ZhangShenNPC } from '../agents/ZhangShenNPC';
 import { DaQiangNPC } from '../agents/DaQiangNPC';
+import { WanderNPC } from '../agents/WanderNPC';
 import { AIAPIClient } from '../utils/AIService';
 import { registerLPCAnims, playLPCAnim, velocityToDirection, getIdleFrame, LPCDirection } from './LPCSprite';
 
@@ -19,6 +20,7 @@ export class MainScene extends Phaser.Scene {
     private nightPolice!: NightPoliceNPC;         // 夜班警察老王
     private zhangShen!: ZhangShenNPC;             // 张婶（便利店）
     private daQiang!: DaQiangNPC;                 // 大强（咖啡馆）
+    private wanderNPC!: WanderNPC;                // 疯叔（流浪汉）
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
     private background!: Phaser.GameObjects.TileSprite;
 
@@ -100,6 +102,10 @@ export class MainScene extends Phaser.Scene {
         this.load.spritesheet('npc_zhangshen', 'assets/sprites/npc_zhangshen.png', {
             frameWidth: 64,
             frameHeight: 64,
+        });
+        this.load.spritesheet('npc2', 'assets/sprites/npc2.png', {
+            frameWidth: 64,
+            frameHeight: 64
         });
         this.load.spritesheet('npc_daqiang', 'assets/sprites/npc_daqiang.png', {
             frameWidth: 64,
@@ -221,6 +227,14 @@ export class MainScene extends Phaser.Scene {
             console.log('☕ 大强已上岗！');
         } catch (error) {
             console.error('大强初始化失败，但游戏继续运行:', error);
+        }
+
+        try {
+            this.wanderNPC = new WanderNPC(this, this.timeManager);
+            this.wanderNPC.getNPC().setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
+            console.log('🤪 疯叔已上线！');
+        } catch (error) {
+            console.error('疯叔初始化失败，但游戏继续运行:', error);
         }
     }
 
@@ -647,6 +661,11 @@ export class MainScene extends Phaser.Scene {
                 this.daQiang.update(delta);
                 this.daQiang.getNPC().update();
             }
+
+            if (this.wanderNPC) {
+                this.wanderNPC.update(delta);
+                this.wanderNPC.getNPC().update();
+            }
         } catch (error) {
             // 静默处理
         }
@@ -1025,12 +1044,23 @@ export class MainScene extends Phaser.Scene {
                 );
             }
 
+            // 检查玩家是否靠近疯叔
+            let distanceToWander = Infinity;
+            const wanderNPCObj = this.wanderNPC?.getNPC();
+            if (wanderNPCObj) {
+                distanceToWander = Phaser.Math.Distance.Between(
+                    this.player.x, this.player.y,
+                    wanderNPCObj.x, wanderNPCObj.y
+                );
+            }
+
             const isNearNPC = distanceToNPC < 80;
             const isNearPolice = distanceToPolice < 80;
             const isNearWang = distanceToWang < 80;
             const isNearZhang = distanceToZhang < 80;
             const isNearDaQiang = distanceToDaQiang < 80;
-            const isNear = isNearNPC || isNearPolice || isNearWang || isNearZhang || isNearDaQiang;
+            const isNearWander = distanceToWander < 80;
+            const isNear = isNearNPC || isNearPolice || isNearWang || isNearZhang || isNearDaQiang || isNearWander;
 
             if (isNear && !this.isNearNPC) {
                 this.isNearNPC = true;
@@ -1041,7 +1071,7 @@ export class MainScene extends Phaser.Scene {
             // 检查是否按下E键
             if (this.isNearNPC && Phaser.Input.Keyboard.JustDown(this.eKey)) {
                 // 找最近的 NPC 对话
-                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC, distanceToZhang, distanceToDaQiang);
+                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC, distanceToZhang, distanceToDaQiang, distanceToWander);
                 if (isNearPolice && distanceToPolice === minDist) {
                     this.startDialog('police');
                 } else if (isNearWang && distanceToWang === minDist) {
@@ -1050,6 +1080,8 @@ export class MainScene extends Phaser.Scene {
                     this.startDialog('zhang');
                 } else if (isNearDaQiang && distanceToDaQiang === minDist) {
                     this.startDialog('daqiang');
+                } else if (isNearWander && distanceToWander === minDist) {
+                    this.startDialog('wander');
                 } else if (isNearNPC) {
                     this.startDialog('npc');
                 }
@@ -1083,7 +1115,7 @@ export class MainScene extends Phaser.Scene {
     /**
      * 🚀 开始对话 - 支持不同NPC类型
      */
-    private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' | null = null;
+    private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' | 'wander' | null = null;
     private greetingPending = false; // 开场白是否还在等待中（玩家发消息后应忽略）
 
     // ── 移动调试 ──
@@ -1098,7 +1130,7 @@ export class MainScene extends Phaser.Scene {
         px: 0, py: 0,
     };
     
-    private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' = 'npc'): void {
+    private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' | 'wander' = 'npc'): void {
         this.currentDialogNPC = npcType;
 
         // 🧊 冻结全局 AI：对话期间所有 NPC 后台 low 任务直接丢弃
@@ -1123,6 +1155,10 @@ export class MainScene extends Phaser.Scene {
             console.log('☕ 开始与大强对话');
             this.daQiang?.pausePatrol();
             this.daQiang?.getNPC()?.faceToward(px, py);
+        } else if (npcType === 'wander') {
+            console.log('🤪 开始与疯叔对话');
+            this.wanderNPC?.pausePatrol();
+            this.wanderNPC?.getNPC()?.faceToward(px, py);
         } else {
             console.log('💬 开始与NPC对话');
         }
@@ -1154,6 +1190,9 @@ export class MainScene extends Phaser.Scene {
         } else if (npcType === 'daqiang') {
             const greeting = this.daQiang?.generateGreeting() ?? '进来坐。';
             this.addChatMessage('大强', greeting);
+        } else if (npcType === 'wander') {
+            const greeting = this.wanderNPC?.generateGreeting() ?? '……';
+            this.addChatMessage('疯叔', greeting);
         }
         
         // 重置输入
@@ -1204,6 +1243,9 @@ export class MainScene extends Phaser.Scene {
         } else if (this.currentDialogNPC === 'daqiang') {
             this.daQiang?.resumePatrol();
             this.daQiang?.getNPC()?.restoreDirection();
+        } else if (this.currentDialogNPC === 'wander') {
+            this.wanderNPC?.resumePatrol();
+            this.wanderNPC?.getNPC()?.restoreDirection();
         }
         this.currentDialogNPC = null;
     }
@@ -1273,6 +1315,16 @@ export class MainScene extends Phaser.Scene {
             } catch (error) {
                 console.error('大强AI对话失败:', error);
                 this.replaceLastMessage('大强', '哎，走神了，你说啥来着？');
+            }
+        } else if (this.currentDialogNPC === 'wander') {
+            // 与疯叔对话
+            this.addChatMessage('疯叔', '……');
+            try {
+                const response = await this.wanderNPC.handleConversation(message);
+                this.replaceLastMessage('疯叔', response);
+            } catch (error) {
+                console.error('疯叔AI对话失败:', error);
+                this.replaceLastMessage('疯叔', '……（没有回应）');
             }
         }
     }
