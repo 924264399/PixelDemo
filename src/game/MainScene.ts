@@ -1188,6 +1188,9 @@ export class MainScene extends Phaser.Scene {
         this.hiddenInput.blur();
         this.hiddenInput.value = '';
         
+        // 🔥 先解冻全局 AI，再恢复 NPC（确保 resumePatrol 里的 LLM 请求不会被 frozen 拒绝）
+        AIAPIClient.getInstance().unfreeze();
+
         // 恢复警察巡逻
         if (this.currentDialogNPC === 'police') {
             this.policeSystem?.getPoliceOfficer()?.resumePatrol();
@@ -1203,9 +1206,6 @@ export class MainScene extends Phaser.Scene {
             this.daQiang?.getNPC()?.restoreDirection();
         }
         this.currentDialogNPC = null;
-
-        // 🔥 解冻全局 AI：对话结束，后台任务恢复排队
-        AIAPIClient.getInstance().unfreeze();
     }
 
     /**

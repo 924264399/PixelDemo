@@ -96,9 +96,9 @@ export class AIAPIClient {
     private constructor() {
         // 从环境变量加载配置（支持浏览器环境）
         this.config = {
-            endpoint: this.getEnvVar('AI_API_ENDPOINT') || 'https://api.xiaomimimo.com/v1/chat/completions',
-            apiKey: this.getEnvVar('AI_API_KEY') || 'sk-chlz73wt3dalkkp2eh7rylsdujk1vw14io4h8nu6cghphs9l',
-            model: this.getEnvVar('AI_MODEL') || 'mimo-v2-omni',
+            endpoint: this.getEnvVar('AI_API_ENDPOINT') || 'https://api.qnaigc.com/v1/chat/completions',
+            apiKey: this.getEnvVar('AI_API_KEY') || 'sk-240215308ff806f2a9e1743b19bae4b8b99f18a5ea7f4e388d40eb350e3711d5',
+            model: this.getEnvVar('AI_MODEL') || 'doubao-seed-1.6-flash',
             temperature: 0.8,
             maxTokens: 300,  // 给回复足够空间，避免 length 截断
             timeout: 20000   // 超时20s，给网络足够余量
@@ -413,7 +413,7 @@ export class NPCAIAssistant {
 
         const response = await this.client.chatCompletion(messages, {
             temperature: 0.7,
-            maxTokens: 150,
+            maxTokens: 250,
             _priority: priority,
         } as any);
 

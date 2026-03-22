@@ -5,7 +5,7 @@
  */
 
 import { NPC, NPCConfig } from '../game/NPC';
-import { NPCAIAssistant } from '../utils/AIService';
+import { NPCAIAssistant, AIAPIClient } from '../utils/AIService';
 import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { registerLPCAnims } from '../game/LPCSprite';
@@ -178,31 +178,31 @@ export class ZhangShenNPC {
      */
     private async maybeSpiceAndPool(original: string): Promise<void> {
         try {
-            const tempAssistant = new NPCAIAssistant('npc_zhangshen_gossip');
-            const systemPrompt = buildNPCPrompt(
-                `你是张婶（张秀珍），50岁，哑巴镇便利店老板娘，典型东北大妈，嗓门大，爱传话，说话夸张热情。`,
-                this.timeManager.getHour(),
-                this.timeManager.getMinute()
-            );
+            const client = AIAPIClient.getInstance();
 
-            // 第一步：判断有没有八卦价值
-            const judgePrompt = `李家妹子对你说了："${original}"。
-作为一个爱八卦的东北大妈，你觉得这句话有没有传出去的价值？（涉及人名、事件、秘密、矛盾、感情、钱财、异常情况等算有价值，纯问好或无实质内容算没有）。
-只回答 YES 或 NO，不要其他任何内容。`;
+            // 第一步：判断有没有八卦价值（单次请求，不带历史）
+            const judge = await client.directRequest([
+                { role: 'system', content: `你是张婶，东北大妈，爱八卦。` },
+                { role: 'user', content: `妹子说："${original}"。有八卦价值(涉及人/事/秘密/矛盾/感情/钱)吗？只回答YES或NO。` }
+            ], { maxTokens: 100 });
+            console.log(`🛒 八卦判断结果: "${judge?.content}" success=${judge?.success}`);
+            const judgeText = (judge?.content ?? '').trim().toUpperCase();
+            // 截断或失败时 judgeText 为空 → 跳过
+            if (!judgeText) return;
+            if (!judgeText.includes('YES') && !judgeText.includes('是') && !judgeText.includes('有')) return;
 
-            const judge = await tempAssistant.handleConversation(systemPrompt, judgePrompt);
-            if (!judge || !judge.trim().toUpperCase().startsWith('YES')) return;
-
-            // 第二步：添油加醋生成传话版本
-            const spicePrompt = `把这件事用张婶的风格传给街坊——夸大细节、加上推测、带上情绪，但核心事实保留。原话是："${original}"。不超过25个字，一句话，东北口语，只输出那句转述，不要任何前缀。`;
-            const gossip = await tempAssistant.handleConversation(systemPrompt, spicePrompt);
+            // 第二步：添油加醋生成传话版本（单次请求，不带历史）
+            const gossipRes = await client.directRequest([
+                { role: 'system', content: `你是张婶，东北大妈，爱八卦，说话夸张。` },
+                { role: 'user', content: `把"${original}"用张婶风格夸大转述，≤25字，东北口语，只输出那句话。` }
+            ], { maxTokens: 60 });
+            const gossip = gossipRes?.content;
 
             if (!gossip) return;
             const clean = gossip.replace(/^["「『]|["」』]$/g, '').trim();
 
-            // 写入共享池
-            GossipPool.getInstance().addNote(original, this.timeManager.getHour());
-            GossipPool.getInstance().updateLastGossip(clean);
+            // 写入共享池（直接带入加工版，避免 updateLastGossip 错位）
+            GossipPool.getInstance().addNote(original, this.timeManager.getHour(), clean);
 
             // 对话结束后才冒气泡（对话中不覆盖回复）
             if (!this.isDialogMode) {
