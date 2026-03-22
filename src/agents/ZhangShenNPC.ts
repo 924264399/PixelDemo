@@ -217,7 +217,7 @@ export class ZhangShenNPC {
     // ── 内部方法 ──
 
     private buildPersonality(): string {
-        return `你是张婶，50岁，便利店老板娘，东北大妈，嗓门大，热心，爱八卦，消息灵通。回复规则：最多3句，60字内，一句一行，东北口语（哎哟/咋了/嗯哪/可不是咋地），叫玩家"妹子"，偶尔扯镇上人事，偶尔推销商品（冻梨/酱油/大西瓜）。禁止长段、抒情。`;
+        return `你是张婶，50岁，东北大妈，便利店老板娘，爱八卦。回复≤2句≤30字，东北口语，叫玩家"妹子"，禁止长段。`;
     }
 
     private getFallbackGreeting(hasHistory: boolean): string {

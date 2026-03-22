@@ -173,13 +173,14 @@ export class AIAPIClient {
             return { success: false, error: 'frozen' };
         }
 
+        const enqueueTime = Date.now();
         return new Promise<AIResponse>((resolve) => {
-            const task = async () => { resolve(await this.executeRequest(messages, options)); };
+            const task = async () => { resolve(await this.executeRequest(messages, options, enqueueTime)); };
 
             if (priority === 'high') {
                 // 玩家对话：插到队列最前面
                 this.requestQueue.unshift({ task, priority: 'high' });
-                console.log(`⚡ 玩家对话入队最前，队列长度: ${this.requestQueue.length}`);
+                console.log(`⚡ [T+0ms] 玩家对话入队最前，队列长度: ${this.requestQueue.length}，isProcessing: ${this.isProcessingQueue}`);
             } else {
                 // NPC 气泡/八卦：追加到队尾
                 this.requestQueue.push({ task, priority: 'low' });
@@ -207,7 +208,10 @@ export class AIAPIClient {
                 const nextIsHigh = this.requestQueue[0]?.priority === 'high';
                 if (!nextIsHigh) {
                     const gap = 500 - (Date.now() - this.lastRequestTime);
-                    if (gap > 0) await this.sleep(gap);
+                    if (gap > 0) {
+                        console.log(`⏸️ low任务间隔等待 ${gap}ms`);
+                        await this.sleep(gap);
+                    }
                 }
             }
         }
@@ -218,7 +222,8 @@ export class AIAPIClient {
     /** 实际执行单次 HTTP 请求 */
     private async executeRequest(
         messages: AIMessage[],
-        options?: { temperature?: number; maxTokens?: number; stream?: boolean }
+        options?: { temperature?: number; maxTokens?: number; stream?: boolean },
+        enqueueTime?: number
     ): Promise<AIResponse> {
         try {
             const requestData = {
@@ -229,12 +234,13 @@ export class AIAPIClient {
                 max_tokens: options?.maxTokens ?? this.config.maxTokens,
             };
 
-            console.log(`🤖 AI请求 #${++this.requestCount} (messages: ${messages.length})`);
+            const waitTime = enqueueTime ? Date.now() - enqueueTime : 0;
+            console.log(`🤖 AI请求 #${++this.requestCount} (messages: ${messages.length}) 排队等待: ${waitTime}ms`);
             this.lastRequestTime = Date.now();
             const _reqStart = Date.now();
 
             const response = await this.makeRequest(requestData);
-            console.log(`⏱️ makeRequest 耗时: ${Date.now() - _reqStart}ms`);
+            console.log(`⏱️ makeRequest 耗时: ${Date.now() - _reqStart}ms | 全程(入队→回复): ${enqueueTime ? Date.now() - enqueueTime : '?'}ms`);
 
             if (response.choices && response.choices[0]) {
                 const finishReason = response.choices[0].finish_reason;
@@ -269,20 +275,29 @@ export class AIAPIClient {
      * 执行实际的HTTP请求
      */
     private async makeRequest(data: any): Promise<any> {
+        // ── 段1：准备阶段 ──
+        const t0 = Date.now();
         const controller = new AbortController();
-        this.currentRequestController = controller; // 暴露给 freeze() 使用
+        this.currentRequestController = controller;
         const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+        const body = JSON.stringify(data);
+        const t1 = Date.now();
+        console.log(`📦 [1]准备(序列化): ${t1 - t0}ms | body长度: ${body.length}字节`);
 
         try {
+            // ── 段2：网络请求（fetch 到收到响应头） ──
+            const t2 = Date.now();
             const response = await fetch(this.config.endpoint, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.config.apiKey}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(data),
+                body,
                 signal: controller.signal
             });
+            const t3 = Date.now();
+            console.log(`🌐 [2]网络(TTFB): ${t3 - t2}ms | HTTP状态: ${response.status}`);
 
             clearTimeout(timeoutId);
 
@@ -290,7 +305,13 @@ export class AIAPIClient {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            return await response.json();
+            // ── 段3：响应体解析 ──
+            const t4 = Date.now();
+            const result = await response.json();
+            const t5 = Date.now();
+            console.log(`📋 [3]解析(JSON): ${t5 - t4}ms | 总计: ${t5 - t0}ms`);
+
+            return result;
         } finally {
             clearTimeout(timeoutId);
         }
@@ -362,7 +383,7 @@ export class NPCAIAssistant {
     private client: AIAPIClient;
     private npcId: string;
     private conversationHistory: AIMessage[] = [];
-    private readonly MAX_HISTORY = 10; // 最大对话历史数量
+    private readonly MAX_HISTORY = 6; // 最多保留3轮对话历史
 
     constructor(npcId: string) {
         this.client = AIAPIClient.getInstance();
@@ -413,7 +434,7 @@ export class NPCAIAssistant {
 
         const response = await this.client.chatCompletion(messages, {
             temperature: 0.7,
-            maxTokens: 250,
+            maxTokens: 120,
             _priority: priority,
         } as any);
 
