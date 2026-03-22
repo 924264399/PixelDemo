@@ -100,6 +100,12 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
 
         // 物理属性
         this.body?.setSize(32, 32);
+        const body = this.body as Phaser.Physics.Arcade.Body;
+        if (body) {
+            body.setBounce(0, 0);   // 无弹力
+            body.setDrag(0, 0);     // 无阻力，速度由状态机完全控制
+            body.setMaxVelocity(300, 300);
+        }
 
         // 注册 LPC 行走动画
         registerLPCAnims(scene, config.texture, ['walk'], this.framesPerAnim);

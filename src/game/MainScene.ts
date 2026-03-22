@@ -123,11 +123,42 @@ export class MainScene extends Phaser.Scene {
 
         // 设置玩家物理属性
         this.player.setCollideWorldBounds(true);
-        this.player.setBounce(0.2);
-        this.player.setDrag(500);
+        this.player.setBounce(0);
+        this.player.setDrag(800, 800);     // 阻力800，松手立刻停
+        this.player.setMaxVelocity(160);   // 严格限速，防滑动逻辑超标
 
         // 设置键盘输入
         this.cursors = this.input.keyboard.createCursorKeys();
+
+        // F3 切换移动调试面板
+        this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F3)
+            .on('down', () => {
+                this.moveDebugEnabled = !this.moveDebugEnabled;
+                this.moveDebugText?.setVisible(this.moveDebugEnabled);
+                console.log('[Debug] 移动调试面板:', this.moveDebugEnabled ? '开' : '关');
+            });
+
+        // 创建移动调试面板（固定在屏幕左上，不跟随相机）
+        this.moveDebugText = this.add.text(8, 8, '', {
+            fontSize: '11px',
+            color: '#00ff88',
+            backgroundColor: '#000000cc',
+            padding: { x: 6, y: 4 },
+            lineSpacing: 3,
+        }).setScrollFactor(0).setDepth(9000).setVisible(false);
+
+        // 暴露调试数据到 window，可在控制台直接读
+        (window as any).pixelDebug = {
+            get move() { return (window as any)._pixelMoveFrame; },
+            get player() {
+                const scene = (window as any)._pixelScene;
+                if (!scene?.player) return null;
+                return { x: Math.round(scene.player.x), y: Math.round(scene.player.y),
+                         vx: Math.round(scene.player.body.velocity.x),
+                         vy: Math.round(scene.player.body.velocity.y) };
+            },
+        };
+        (window as any)._pixelScene = this;
 
         // F2 切换 NPC 调试视图（碰撞框 + 状态 + 目标线）
         this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F2)
@@ -444,6 +475,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     update(_time: number, delta: number) {
+        // ── 每帧强制清零（直接操作 Vector2，最底层清零）──
+        this.player.body.velocity.set(0);
+
         // 处理键盘输入并检查碰撞
         let velocityX = 0;
         let velocityY = 0;
@@ -480,70 +514,129 @@ export class MainScene extends Phaser.Scene {
         const hits = (nx: number, ny: number) =>
             this.countCollisions(nx, ny, HALF_W, HALF_H, FOOT_OFFSET);
 
-        // ── X 方向 ──
+        // ── X / Y 方向（带转角滑动，互相不覆盖）──
+        let slideY = 0;
+        let slideX = 0;
+        let dbgNextHitsX = 0;
+        let dbgNextHitsY = 0;
+        let dbgBranchX = '—';
+        let dbgBranchY = '—';
+
+        // 用实际delta计算预测步长，避免高刷屏误判碰撞
+        const dtSec = Math.min(delta / 1000, 0.05); // 最大50ms，防止极端卡帧
+
+        // X 方向
         if (velocityX !== 0) {
-            const nextX    = px + velocityX * 0.016;
+            const nextX    = px + velocityX * dtSec;
             const nextHits = hits(nextX, py);
+            dbgNextHitsX = nextHits;
 
             if (nextHits === 0 || (currentHits > 0 && nextHits < currentHits)) {
-                // 正常前进
                 this.player.setVelocityX(velocityX);
+                dbgBranchX = 'move';
             } else if (velocityY === 0) {
-                // 被挡且玩家没按 Y 键 → 尝试转角滑动（微调 Y）
+                // 被挡且玩家没按 Y 键 → 尝试转角滑动
                 let corrected = false;
                 for (const step of CORNER_STEPS) {
                     if (hits(nextX, py - step) === 0) {
                         this.player.setVelocityX(velocityX);
-                        this.player.setVelocityY(-160); // 向上滑过角
+                        slideY = -160;
                         corrected = true; break;
                     }
                     if (hits(nextX, py + step) === 0) {
                         this.player.setVelocityX(velocityX);
-                        this.player.setVelocityY(160);  // 向下滑过角
+                        slideY = 160;
                         corrected = true; break;
                     }
                 }
-                if (!corrected) this.player.setVelocityX(0);
+                if (!corrected) { this.player.setVelocityX(0); dbgBranchX = 'slideX_fail'; }
+                else dbgBranchX = `slideX_ok(sY=${slideY})`;
             } else {
                 this.player.setVelocityX(0);
+                dbgBranchX = 'blocked_diag';
             }
         } else {
             this.player.setVelocityX(0);
+            dbgBranchX = 'no_input';
         }
 
-        // ── Y 方向 ──
+        // Y 方向
         if (velocityY !== 0) {
-            const nextY    = py + velocityY * 0.016;
+            const nextY    = py + velocityY * dtSec;
             const nextHits = hits(px, nextY);
+            dbgNextHitsY = nextHits;
 
             if (nextHits === 0 || (currentHits > 0 && nextHits < currentHits)) {
                 this.player.setVelocityY(velocityY);
+                dbgBranchY = 'move';
             } else if (velocityX === 0) {
-                // 被挡且玩家没按 X 键 → 尝试转角滑动（微调 X）
+                // 被挡且玩家没按 X 键 → 尝试转角滑动
                 let corrected = false;
                 for (const step of CORNER_STEPS) {
                     if (hits(px - step, nextY) === 0) {
                         this.player.setVelocityY(velocityY);
-                        this.player.setVelocityX(-160); // 向左滑过角
+                        slideX = -160;
                         corrected = true; break;
                     }
                     if (hits(px + step, nextY) === 0) {
                         this.player.setVelocityY(velocityY);
-                        this.player.setVelocityX(160);  // 向右滑过角
+                        slideX = 160;
                         corrected = true; break;
                     }
                 }
-                if (!corrected) this.player.setVelocityY(0);
+                if (!corrected) { this.player.setVelocityY(0); dbgBranchY = 'slideY_fail'; }
+                else dbgBranchY = `slideY_ok(sX=${slideX})`;
             } else {
                 this.player.setVelocityY(0);
+                dbgBranchY = 'blocked_diag';
             }
         } else {
-            this.player.setVelocityY(0);
+            // 没按Y键，但X的转角滑动注入了slideY，优先用slideY
+            if (slideY !== 0) {
+                this.player.setVelocityY(slideY);
+                dbgBranchY = `slideY_inject(${slideY})`;
+            } else {
+                this.player.setVelocityY(0);
+                dbgBranchY = 'no_input';
+            }
+        }
+
+        // 应用转角滑动的另一轴（不会被上面的逻辑覆盖）
+        if (slideX !== 0 && velocityX === 0) {
+            this.player.setVelocityX(slideX);
+        }
+
+        // ── 调试数据更新（在所有 setVelocity 之后读，反映本帧最终速度）──
+        const vx = this.player.body.velocity.x;
+        const vy = this.player.body.velocity.y;
+        const dbg = {
+            px: Math.round(this.player.x), py: Math.round(this.player.y),
+            vx: Math.round(vx), vy: Math.round(vy),
+            inputX: velocityX, inputY: velocityY,
+            slideX, slideY,
+            hits: currentHits,
+            nextHitsX: dbgNextHitsX,
+            nextHitsY: dbgNextHitsY,
+            branchX: dbgBranchX,
+            branchY: dbgBranchY,
+        };
+        (window as any)._pixelMoveFrame = dbg;
+        if (this.moveDebugEnabled && this.moveDebugText) {
+            const fps = Math.round(this.game.loop.actualFps);
+            const physSteps = Math.round(1000 / (this.game.loop.delta || 16.67));
+            this.moveDebugText.setText([
+                `[F3] FPS=${fps}  delta=${Math.round(delta)}ms`,
+                `位置:  (${dbg.px}, ${dbg.py})`,
+                `速度:  vx=${dbg.vx}  vy=${dbg.vy}`,
+                `输入:  ix=${dbg.inputX}  iy=${dbg.inputY}`,
+                `nextHits: X=${dbg.nextHitsX}  Y=${dbg.nextHitsY}`,
+                `分支:  X=${dbg.branchX}`,
+                `       Y=${dbg.branchY}`,
+                `碰撞:  hits=${dbg.hits}/4`,
+            ]);
         }
 
         // ── 玩家动画 ──
-        const vx = this.player.body.velocity.x;
-        const vy = this.player.body.velocity.y;
         const isMoving = Math.abs(vx) > 5 || Math.abs(vy) > 5;
 
         if (isMoving) {
@@ -1002,6 +1095,18 @@ export class MainScene extends Phaser.Scene {
      * 🚀 开始对话 - 支持不同NPC类型
      */
     private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | null = null;
+
+    // ── 移动调试 ──
+    private moveDebugEnabled = false;
+    private moveDebugText?: Phaser.GameObjects.Text;
+    // 最近一帧的移动数据，暴露给 window.pixelDebug
+    private lastMoveFrame = {
+        vx: 0, vy: 0,
+        inputX: 0, inputY: 0,
+        slideX: 0, slideY: 0,
+        hits: 0,
+        px: 0, py: 0,
+    };
     
     private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' = 'npc'): void {
         this.currentDialogNPC = npcType;

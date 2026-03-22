@@ -20,13 +20,14 @@ const config: Phaser.Types.Core.GameConfig = {
         autoCenter: Phaser.Scale.CENTER_BOTH,
         parent: 'game-container'
     },
-    physics: {
-        default: 'arcade',
-        arcade: {
-            gravity: { y: 0 },
-            debug: false
-        }
-    },
+        physics: {
+            default: 'arcade',
+            arcade: {
+                gravity: { y: 0 },
+                debug: false
+                // fps 不设置，物理与渲染帧同步，避免固定步长下多次积分
+            }
+        },
     scene: MainScene
 };
 
