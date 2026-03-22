@@ -6,6 +6,7 @@ import { CafeWorkerAgent, NPCPersonality } from './AIAgent';
 import { TimeManager } from './TimeManager';
 import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 import { NightPoliceNPC } from '../agents/NightPoliceNPC';
+import { ZhangShenNPC } from '../agents/ZhangShenNPC';
 import { registerLPCAnims, playLPCAnim, velocityToDirection, getIdleFrame, LPCDirection } from './LPCSprite';
 
 export class MainScene extends Phaser.Scene {
@@ -14,6 +15,7 @@ export class MainScene extends Phaser.Scene {
     private npc!: NPC; // 保留字段兼容旧代码引用，不再使用 SmartNPC
     private policeSystem!: PoliceNPCIntegration; // 白班警察老刘
     private nightPolice!: NightPoliceNPC;         // 夜班警察老王
+    private zhangShen!: ZhangShenNPC;             // 张婶（便利店）
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
     private background!: Phaser.GameObjects.TileSprite;
 
@@ -92,6 +94,10 @@ export class MainScene extends Phaser.Scene {
             frameWidth: 64,
             frameHeight: 64,
         });
+        this.load.spritesheet('npc_zhangshen', 'assets/sprites/npc_zhangshen.png', {
+            frameWidth: 64,
+            frameHeight: 64,
+        });
     }
 
     create() {
@@ -165,6 +171,14 @@ export class MainScene extends Phaser.Scene {
             this.nightPolice.getNPC().setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
         } catch (error) {
             console.error('老王初始化失败，但游戏继续运行:', error);
+        }
+
+        try {
+            this.zhangShen = new ZhangShenNPC(this, this.timeManager);
+            this.zhangShen.getNPC().setCollisionChecker((x, y) => this.checkCollisionAt(x, y));
+            console.log('✅ 张婶已上岗！');
+        } catch (error) {
+            console.error('张婶初始化失败，但游戏继续运行:', error);
         }
     }
 
@@ -399,6 +413,8 @@ export class MainScene extends Phaser.Scene {
             const roofSprite = this.add.tileSprite(0, 0, this.WORLD_WIDTH, this.WORLD_HEIGHT, key);
             roofSprite.setOrigin(0, 0);
             roofSprite.setAlpha(1.0);
+            // 屋顶必须在所有NPC/玩家（depth 100~2200）之上，对话框（5000）之下
+            roofSprite.setDepth(3000);
             this.roofSprites.set(key, roofSprite);
             this.currentRoofAlphas.set(key, 1.0);
             this.targetRoofAlphas.set(key, 1.0);
@@ -427,7 +443,7 @@ export class MainScene extends Phaser.Scene {
         });
     }
 
-    update() {
+    update(_time: number, delta: number) {
         // 处理键盘输入并检查碰撞
         let velocityX = 0;
         let velocityY = 0;
@@ -556,6 +572,11 @@ export class MainScene extends Phaser.Scene {
             if (this.nightPolice) {
                 this.nightPolice.update();
                 this.nightPolice.getNPC().update(); // ← 物理移动帧
+            }
+
+            if (this.zhangShen) {
+                this.zhangShen.update(delta);
+                this.zhangShen.getNPC().update();
             }
         } catch (error) {
             // 静默处理
@@ -709,6 +730,14 @@ export class MainScene extends Phaser.Scene {
             const wangNPC = this.nightPolice.getNPC();
             if (wangNPC) {
                 wangNPC.setDepth(baseNPCDepth + Math.floor(wangNPC.y));
+            }
+        }
+
+        // 处理张婶的深度排序（ZhangShenNPC.update 内部也做，这里双保险）
+        if (this.zhangShen) {
+            const zhangNPC = this.zhangShen.getNPC();
+            if (zhangNPC) {
+                zhangNPC.setDepth(baseNPCDepth + Math.floor(zhangNPC.y));
             }
         }
     }
@@ -907,10 +936,21 @@ export class MainScene extends Phaser.Scene {
                 );
             }
 
+            // 检查玩家是否靠近张婶
+            let distanceToZhang = Infinity;
+            const zhangNPC = this.zhangShen?.getNPC();
+            if (zhangNPC) {
+                distanceToZhang = Phaser.Math.Distance.Between(
+                    this.player.x, this.player.y,
+                    zhangNPC.x, zhangNPC.y
+                );
+            }
+
             const isNearNPC = distanceToNPC < 80;
             const isNearPolice = distanceToPolice < 80;
             const isNearWang = distanceToWang < 80;
-            const isNear = isNearNPC || isNearPolice || isNearWang;
+            const isNearZhang = distanceToZhang < 80;
+            const isNear = isNearNPC || isNearPolice || isNearWang || isNearZhang;
 
             if (isNear && !this.isNearNPC) {
                 this.isNearNPC = true;
@@ -921,11 +961,13 @@ export class MainScene extends Phaser.Scene {
             // 检查是否按下E键
             if (this.isNearNPC && Phaser.Input.Keyboard.JustDown(this.eKey)) {
                 // 找最近的 NPC 对话
-                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC);
+                const minDist = Math.min(distanceToPolice, distanceToWang, distanceToNPC, distanceToZhang);
                 if (isNearPolice && distanceToPolice === minDist) {
                     this.startDialog('police');
                 } else if (isNearWang && distanceToWang === minDist) {
                     this.startDialog('wang');
+                } else if (isNearZhang && distanceToZhang === minDist) {
+                    this.startDialog('zhang');
                 } else if (isNearNPC) {
                     this.startDialog('npc');
                 }
@@ -959,19 +1001,28 @@ export class MainScene extends Phaser.Scene {
     /**
      * 🚀 开始对话 - 支持不同NPC类型
      */
-    private currentDialogNPC: 'npc' | 'police' | 'wang' | null = null;
+    private currentDialogNPC: 'npc' | 'police' | 'wang' | 'zhang' | null = null;
     
-    private startDialog(npcType: 'npc' | 'police' | 'wang' = 'npc'): void {
+    private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' = 'npc'): void {
         this.currentDialogNPC = npcType;
         
+        const px = this.player.x;
+        const py = this.player.y;
+
         if (npcType === 'police') {
             console.log('👮‍♂️ 开始与老刘对话');
             this.policeSystem?.getPoliceOfficer()?.pausePatrol();
+            this.policeSystem?.getPoliceNPC()?.faceToward(px, py);
         } else if (npcType === 'wang') {
             console.log('🌙 开始与老王对话');
             this.nightPolice?.pausePatrol();
+            this.nightPolice?.getNPC()?.faceToward(px, py);
+        } else if (npcType === 'zhang') {
+            console.log('🛒 开始与张婶对话');
+            this.zhangShen?.pausePatrol();
+            this.zhangShen?.getNPC()?.faceToward(px, py);
         } else {
-            console.log('💬 开始与NPC对话');
+            console.log('� 开始与NPC对话');
         }
 
         this.isInDialogMode = true;
@@ -996,6 +1047,11 @@ export class MainScene extends Phaser.Scene {
             this.addChatMessage('民警老王', '（抬起头）');
             this.nightPolice?.generateGreeting().then((greeting: string) => {
                 this.replaceLastMessage('民警老王', greeting);
+            });
+        } else if (npcType === 'zhang') {
+            this.addChatMessage('张婶', '（抬头看门口）');
+            this.zhangShen?.generateGreeting().then((greeting: string) => {
+                this.replaceLastMessage('张婶', greeting);
             });
         }
         
@@ -1033,8 +1089,13 @@ export class MainScene extends Phaser.Scene {
         // 恢复警察巡逻
         if (this.currentDialogNPC === 'police') {
             this.policeSystem?.getPoliceOfficer()?.resumePatrol();
+            this.policeSystem?.getPoliceNPC()?.restoreDirection();
         } else if (this.currentDialogNPC === 'wang') {
             this.nightPolice?.resumePatrol();
+            this.nightPolice?.getNPC()?.restoreDirection();
+        } else if (this.currentDialogNPC === 'zhang') {
+            this.zhangShen?.resumePatrol();
+            this.zhangShen?.getNPC()?.restoreDirection();
         }
         this.currentDialogNPC = null;
     }
@@ -1078,6 +1139,16 @@ export class MainScene extends Phaser.Scene {
             } catch (error) {
                 console.error('老王AI对话失败:', error);
                 this.replaceLastMessage('民警老王', '行了。\n回头说。');
+            }
+        } else if (this.currentDialogNPC === 'zhang') {
+            // 与张婶对话
+            this.addChatMessage('张婶', '（想了想）');
+            try {
+                const response = await this.zhangShen.handleConversation(message);
+                this.replaceLastMessage('张婶', response);
+            } catch (error) {
+                console.error('张婶AI对话失败:', error);
+                this.replaceLastMessage('张婶', '哎哟，这咋整了，你再说一遍？');
             }
         }
     }

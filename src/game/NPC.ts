@@ -71,6 +71,7 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
     // 动画相关
     private framesPerAnim: number;
     private currentDir: LPCDirection = 'down';
+    private savedDir: LPCDirection | null = null; // 对话前保存的方向
 
     // 道路网络坐标（基于地图坐标文档）
     private readonly CROSS_ROAD_X = 1019; // 十字路口X坐标
@@ -169,6 +170,37 @@ export class NPC extends Phaser.Physics.Arcade.Sprite {
      */
     getName(): string {
         return this.npcName;
+    }
+
+    /**
+     * 面向目标坐标（对话开始时调用）
+     * 自动保存对话前的方向，用 restoreDirection() 恢复
+     */
+    faceToward(targetX: number, targetY: number) {
+        // 保存当前方向，对话结束后恢复
+        this.savedDir = this.currentDir;
+
+        const dx = targetX - this.x;
+        const dy = targetY - this.y;
+        if (Math.abs(dy) >= Math.abs(dx)) {
+            this.currentDir = dy >= 0 ? 'down' : 'up';
+        } else {
+            this.currentDir = dx >= 0 ? 'right' : 'left';
+        }
+        this.anims.stop();
+        this.setFrame(getIdleFrame(this.currentDir, this.framesPerAnim));
+    }
+
+    /**
+     * 恢复对话前的朝向（对话结束时调用）
+     */
+    restoreDirection() {
+        if (this.savedDir) {
+            this.currentDir = this.savedDir;
+            this.savedDir = null;
+            this.anims.stop();
+            this.setFrame(getIdleFrame(this.currentDir, this.framesPerAnim));
+        }
     }
 
     /**

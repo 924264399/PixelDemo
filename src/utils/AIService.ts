@@ -55,10 +55,10 @@ export class AIAPIClient {
         this.config = {
             endpoint: this.getEnvVar('AI_API_ENDPOINT') || 'https://api.qnaigc.com/v1/chat/completions',
             apiKey: this.getEnvVar('AI_API_KEY') || '',
-            model: this.getEnvVar('AI_MODEL') || 'minimax/minimax-m2.1',
-            temperature: 0.7,
-            maxTokens: 500,
-            timeout: 30000
+            model: this.getEnvVar('AI_MODEL') || 'deepseek/deepseek-v3',
+            temperature: 0.8,
+            maxTokens: 200,  // NPC回复极短，200足够，减少等待时间
+            timeout: 15000   // 超时从30s压到15s
         };
 
         if (!this.config.apiKey) {

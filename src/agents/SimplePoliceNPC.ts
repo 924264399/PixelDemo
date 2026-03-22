@@ -9,6 +9,7 @@ import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { ThoughtBubble } from '../game/ThoughtBubble';
 import { ShiftHandoffPool } from './ShiftHandoffPool';
+import { GossipPool } from './GossipPool';
 import { PathPlanner } from '../game/PathPlanner';
 
 // ── 关键路径节点（基于 MainScene.ts 实际验证坐标）──────────────
@@ -380,6 +381,7 @@ export class SimplePoliceNPC {
 
     async handleConversation(playerMessage: string): Promise<string> {
         try {
+            const gossip = GossipPool.getInstance().toPromptString();
             const systemPrompt = buildNPCPrompt(
 `你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。现在正在镇上巡逻执勤。
 
@@ -394,7 +396,7 @@ export class SimplePoliceNPC {
 5. 遇到问题先问"咋回事儿"，再给建议。
 6. 不废话，说完就完，不总结，不抒情。
 
-【禁忌】不写长段，不写文章，不说镇子以外的地方。`,
+【禁忌】不写长段，不写文章，不说镇子以外的地方。` + gossip,
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );

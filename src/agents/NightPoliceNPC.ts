@@ -9,6 +9,7 @@ import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { ThoughtBubble } from '../game/ThoughtBubble';
 import { ShiftHandoffPool } from './ShiftHandoffPool';
+import { GossipPool } from './GossipPool';
 import { PathPlanner } from '../game/PathPlanner';
 
 // 老王关键路径节点（从镇东方向入镇）
@@ -303,6 +304,7 @@ export class NightPoliceNPC {
         try {
             // ✅ 使用本地缓存的交接信息（而非每次重新读已清空的 Pool）
             const handoffContext = this.handoffPromptCache;
+            const gossip = GossipPool.getInstance().toPromptString();
 
             const systemPrompt = buildNPCPrompt(
 `你是老王（王大春），47岁，哑巴镇夜班社区民警，从警22年。现在是夜班执勤，正在镇上巡逻。
@@ -318,7 +320,7 @@ export class NightPoliceNPC {
 5. 对玩家叫"李家妹子"，语气简短但不失亲切。
 6. 遇到异常情况（如有人鬼鬼祟祟）反应敏锐，立刻追问细节。
 
-【禁忌】不写长段，不抒情，不废话，不说镇子以外的地方。` + handoffContext,
+【禁忌】不写长段，不抒情，不废话，不说镇子以外的地方。` + handoffContext + gossip,
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
