@@ -39,7 +39,7 @@ export class ZhangShenNPC {
     // 气泡系统
     private thoughtBubble!: ThoughtBubble;
     private lastThoughtTime = 0;
-    private readonly THOUGHT_INTERVAL = 15000; // 最少15秒冒一次
+    private readonly THOUGHT_INTERVAL = 40000; // 最少40秒冒一次
 
     constructor(scene: Phaser.Scene, timeManager: TimeManager) {
         this.scene = scene;
@@ -105,6 +105,11 @@ export class ZhangShenNPC {
 
     resumePatrol(): void {
         this.isDialogMode = false;
+        // 对话结束后，用最后一条消息做八卦判断（此时全局已解冻，low 请求正常排队）
+        if (this.lastPlayerMessage) {
+            this.maybeSpiceAndPool(this.lastPlayerMessage);
+            this.lastPlayerMessage = '';
+        }
     }
 
     // ── 内心独白 ──────────────────────────────────────────────
@@ -113,55 +118,24 @@ export class ZhangShenNPC {
         this.thoughtBubble.show(text, duration);
     }
 
-    /** 店内闲逛时随机触发 LLM 内心独白（与对话历史共享上下文） */
+    /**
+     * 平时溜达时随机冒硬编码气泡（省 LLM，只有写入八卦池时才用 LLM）
+     */
     private maybeShowRandomThought(): void {
         if (this.thoughtBubble.isShowing()) return;
         const now = Date.now();
         if (now - this.lastThoughtTime < this.THOUGHT_INTERVAL) return;
-        if (Math.random() > 0.012) return; // 每帧约1.2%概率，配合间隔控制频率
+        if (Math.random() > 0.015) return;
 
-        this.lastThoughtTime = now; // 先记录时间，防止并发重复触发
-        this.generateAndShowThought();
-    }
-
-    /**
-     * 调用 LLM 生成一句内心独白并显示在气泡里
-     * 用 [THOUGHT] 标签触发，共享 aiAssistant 对话历史（含玩家聊天上下文）
-     * 生成后移除这两条记录，避免污染正式对话历史
-     */
-    private async generateAndShowThought(): Promise<void> {
+        this.lastThoughtTime = now;
         const hour = this.timeManager.getHour();
-        let timeHint: string;
-        if (hour >= 6 && hour < 10)       timeHint = '早上刚开门，进货忙碌';
-        else if (hour >= 10 && hour < 14) timeHint = '上午，客人陆续来';
-        else if (hour >= 14 && hour < 18) timeHint = '下午，店里比较清闲';
-        else if (hour >= 18 && hour < 22) timeHint = '傍晚，晚高峰客人多';
-        else                               timeHint = '夜里，快关门了';
-
-        const systemPrompt = buildNPCPrompt(
-            this.buildPersonality(),
-            this.timeManager.getHour(),
-            this.timeManager.getMinute()
-        );
-
-        const trigger = `[THOUGHT] 现在是${timeHint}。根据你当前的状态和你们聊过的内容，用第一人称说一句内心碎碎念。要求：不超过15个字，东北口语，自然随意，不要任何标点之外的格式。只输出那句话本身。`;
-
-        try {
-            const thought = await this.aiAssistant.handleConversation(systemPrompt, trigger);
-
-            // 生成后移除这两条（[THOUGHT]触发 + 回复），避免污染正式对话历史
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
-
-            if (thought) {
-                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
-                this.showThought(clean, 4000);
-            }
-        } catch {
-            // LLM 失败时 fallback 到硬编码
-            const fallbacks = ['哎哟，这啥情况', '得，先整理货', '唠嗑唠累了'];
-            this.showThought(fallbacks[Math.floor(Math.random() * fallbacks.length)], 3000);
-        }
+        let pool: string[];
+        if (hour >= 6 && hour < 10)       pool = ['今儿进货还没完呢', '鸡蛋摆哪儿啦', '早上忙成啥样了'];
+        else if (hour >= 10 && hour < 14) pool = ['客人怎么不来呢', '这酱油快卖完了', '刘队长上午来过'];
+        else if (hour >= 14 && hour < 18) pool = ['下午没人，犯困', '整理整理货架吧', '听说大强进新咖啡了'];
+        else if (hour >= 18 && hour < 22) pool = ['晚高峰要来了', '哎哟脚疼了', '门口灯是不是坏了'];
+        else                               pool = ['快关门了', '今儿卖了多少钱', '明儿得早起进货'];
+        this.showThought(pool[Math.floor(Math.random() * pool.length)], 3500);
     }
 
     /**
@@ -181,7 +155,7 @@ export class ZhangShenNPC {
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
+            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
             // 开场白不污染对话历史
             const hist = this.aiAssistant.getHistory();
             (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
@@ -191,12 +165,15 @@ export class ZhangShenNPC {
         }
     }
 
+    // 本轮对话中最有价值的一句（关闭对话后用于八卦加工）
+    private lastPlayerMessage = '';
+
     /**
-     * 处理玩家发来的消息，同时写入八卦池
+     * 处理玩家发来的消息（high 优先级，直接发出）。
+     * 同时记录最后一条消息，对话结束后由 resumePatrol() 做八卦判断。
      */
     async handleConversation(playerMessage: string): Promise<string> {
-        // 写入八卦池（宽松筛选在 GossipPool 内部完成）
-        GossipPool.getInstance().addNote(playerMessage, this.timeManager.getHour());
+        this.lastPlayerMessage = playerMessage; // 记录最后一条
 
         try {
             const systemPrompt = buildNPCPrompt(
@@ -204,11 +181,55 @@ export class ZhangShenNPC {
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, playerMessage);
+            const response = await this.aiAssistant.handleConversation(systemPrompt, playerMessage, 'high');
             return response ?? this.getFallbackResponse();
         } catch (error) {
             console.error('张婶对话失败:', error);
             return '哎哟，这咋整了，你再说一遍？';
+        }
+    }
+
+    /**
+     * 异步判断玩家消息是否有八卦价值：
+     * - 有价值 → LLM 添油加醋 → 写入共享池 → 冒 LLM 气泡（"哎哟这事儿得传出去！"）
+     * - 无价值 → 什么都不做
+     * ⚠️ 全程用独立 tempAssistant，绝不污染主对话历史
+     */
+    private async maybeSpiceAndPool(original: string): Promise<void> {
+        try {
+            const tempAssistant = new NPCAIAssistant('npc_zhangshen_gossip');
+            const systemPrompt = buildNPCPrompt(
+                `你是张婶（张秀珍），50岁，哑巴镇便利店老板娘，典型东北大妈，嗓门大，爱传话，说话夸张热情。`,
+                this.timeManager.getHour(),
+                this.timeManager.getMinute()
+            );
+
+            // 第一步：判断有没有八卦价值
+            const judgePrompt = `李家妹子对你说了："${original}"。
+作为一个爱八卦的东北大妈，你觉得这句话有没有传出去的价值？（涉及人名、事件、秘密、矛盾、感情、钱财、异常情况等算有价值，纯问好或无实质内容算没有）。
+只回答 YES 或 NO，不要其他任何内容。`;
+
+            const judge = await tempAssistant.handleConversation(systemPrompt, judgePrompt);
+            if (!judge || !judge.trim().toUpperCase().startsWith('YES')) return;
+
+            // 第二步：添油加醋生成传话版本
+            const spicePrompt = `把这件事用张婶的风格传给街坊——夸大细节、加上推测、带上情绪，但核心事实保留。原话是："${original}"。不超过25个字，一句话，东北口语，只输出那句转述，不要任何前缀。`;
+            const gossip = await tempAssistant.handleConversation(systemPrompt, spicePrompt);
+
+            if (!gossip) return;
+            const clean = gossip.replace(/^["「『]|["」』]$/g, '').trim();
+
+            // 写入共享池
+            GossipPool.getInstance().addNote(original, this.timeManager.getHour());
+            GossipPool.getInstance().updateLastGossip(clean);
+
+            // 对话结束后才冒气泡（对话中不覆盖回复）
+            if (!this.isDialogMode) {
+                this.showThought(clean, 5000);
+            }
+
+        } catch {
+            // 判断/加工失败，静默忽略，不影响主流程
         }
     }
 

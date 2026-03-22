@@ -46,9 +46,31 @@ export class AIAPIClient {
     private requestCount = 0;
     private totalCost = 0;
     private lastRequestTime = 0;
-    private readonly MIN_REQUEST_INTERVAL = 2000; // � 2秒间隔，避免429
-    private isRequesting = false; // 防止并发请求
+    private readonly MIN_REQUEST_INTERVAL = 500; // 各请求间最短间隔（ms）
     private retryAfter = 0; // 429错误后的等待时间
+
+    // 全局串行队列：同一时间只有 1 个 LLM 请求在跑
+    //   'high'（玩家对话）→ 插到队列最前，当前 low 任务跑完立刻轮到
+    //   'low'（气泡/八卦）→ 正常追加到队尾
+    private requestQueue: Array<{ task: () => Promise<void>; priority: 'high' | 'low' }> = [];
+    private isProcessingQueue = false;
+
+    // 全局对话冻结开关：对话期间所有 low 请求直接丢弃，不入队
+    private frozen = false;
+
+    /** 进入对话时冻结：清空队列中所有 low 任务，后续 low 请求直接丢弃 */
+    freeze(): void {
+        this.frozen = true;
+        const before = this.requestQueue.length;
+        this.requestQueue = this.requestQueue.filter(item => item.priority === 'high');
+        console.log(`🧊 AI全局冻结，清除 ${before - this.requestQueue.length} 个low任务`);
+    }
+
+    /** 对话结束时解冻：后续 low 请求恢复正常排队 */
+    unfreeze(): void {
+        this.frozen = false;
+        console.log(`🔥 AI全局解冻，后台任务恢复`);
+    }
 
     private constructor() {
         // 从环境变量加载配置（支持浏览器环境）
@@ -58,7 +80,7 @@ export class AIAPIClient {
             model: this.getEnvVar('AI_MODEL') || 'deepseek/deepseek-v3',
             temperature: 0.8,
             maxTokens: 200,  // NPC回复极短，200足够，减少等待时间
-            timeout: 15000   // 超时从30s压到15s
+            timeout: 20000   // 超时20s，给网络足够余量
         };
 
         if (!this.config.apiKey) {
@@ -93,22 +115,28 @@ export class AIAPIClient {
     }
 
     /**
-     * 发送聊天请求 - 带429保护和并发控制
+     * 发送聊天请求。
+     *
+     * 设计原则：
+     *   - 全局单锁：同一时间只有 1 个 HTTP 请求在跑，绝不并发
+     *   - 玩家优先：priority='high' 的请求插到队列最前面
+     *   - 不覆盖：所有请求都会最终执行（low任务不会被high任务覆盖）
+     *   - 去重：如果队列里已有相同 NPC 的 low 请求，丢掉旧的保留新的
      */
     async chatCompletion(
-        messages: AIMessage[], 
+        messages: AIMessage[],
         options?: {
             temperature?: number;
             maxTokens?: number;
             stream?: boolean;
         }
     ): Promise<AIResponse> {
-        // 1. 检查API密钥
+        // 1. 检查 API 密钥
         if (!this.config.apiKey || this.config.apiKey === 'your-api-key-here') {
             return { success: false, error: 'API密钥未配置或无效' };
         }
 
-        // 2. 检查是否处于429冷却期
+        // 2. 检查 429 冷却期
         const now = Date.now();
         if (now < this.retryAfter) {
             const waitTime = Math.ceil((this.retryAfter - now) / 1000);
@@ -116,32 +144,64 @@ export class AIAPIClient {
             return { success: false, error: `API限流中，请等待${waitTime}秒` };
         }
 
-        // 3. 防止并发请求
-        if (this.isRequesting) {
-            console.warn('⏳ 已有请求进行中，跳过本次请求');
-            return { success: false, error: '请求进行中，请稍后再试' };
+        const priority = (options as any)?._priority ?? 'low';
+
+        // 3. 冻结期间：low 请求直接丢弃，high 请求照常执行
+        if (this.frozen && priority === 'low') {
+            console.log(`🧊 冻结中，丢弃 low 请求`);
+            return { success: false, error: 'frozen' };
         }
 
-        // 4. 频率控制
-        const timeSinceLastRequest = now - this.lastRequestTime;
-        if (timeSinceLastRequest < this.MIN_REQUEST_INTERVAL) {
-            await this.sleep(this.MIN_REQUEST_INTERVAL - timeSinceLastRequest);
+        return new Promise<AIResponse>((resolve) => {
+            const task = async () => { resolve(await this.executeRequest(messages, options)); };
+
+            if (priority === 'high') {
+                // 玩家对话：插到队列最前面
+                this.requestQueue.unshift({ task, priority: 'high' });
+                console.log(`⚡ 玩家对话入队最前，队列长度: ${this.requestQueue.length}`);
+            } else {
+                // NPC 气泡/八卦：追加到队尾
+                this.requestQueue.push({ task, priority: 'low' });
+            }
+
+            this.processQueue();
+        });
+    }
+
+    /** 全局串行消费队列：同一时间只有 1 个请求在跑 */
+    private async processQueue(): Promise<void> {
+        if (this.isProcessingQueue) return; // 已有消费者在跑，直接返回
+        this.isProcessingQueue = true;
+
+        while (this.requestQueue.length > 0) {
+            const { task, priority } = this.requestQueue.shift()!;
+            console.log(`🔄 执行请求 priority=${priority}，剩余队列: ${this.requestQueue.length}`);
+            await task();
+            // 请求之间保留最短间隔，避免触发限流
+            const gap = this.MIN_REQUEST_INTERVAL - (Date.now() - this.lastRequestTime);
+            if (gap > 0) await this.sleep(gap);
         }
 
-        this.isRequesting = true;
+        this.isProcessingQueue = false;
+    }
 
+    /** 实际执行单次 HTTP 请求 */
+    private async executeRequest(
+        messages: AIMessage[],
+        options?: { temperature?: number; maxTokens?: number; stream?: boolean }
+    ): Promise<AIResponse> {
         try {
             const requestData = {
                 stream: false,
                 model: this.config.model,
-                messages: messages,
-                temperature: options?.temperature || this.config.temperature,
-                max_tokens: options?.maxTokens || this.config.maxTokens,
+                messages,
+                temperature: options?.temperature ?? this.config.temperature,
+                max_tokens: options?.maxTokens ?? this.config.maxTokens,
             };
 
             console.log(`🤖 AI请求 #${++this.requestCount} (messages: ${messages.length})`);
-
             this.lastRequestTime = Date.now();
+
             const response = await this.makeRequest(requestData);
 
             if (response.choices && response.choices[0]) {
@@ -149,27 +209,20 @@ export class AIAPIClient {
                 const usage = response.usage;
                 const estimatedCost = this.calculateCost(usage);
                 this.totalCost += estimatedCost;
-
                 console.log(`✅ AI响应成功 tokens:${usage?.total_tokens || 0} cost:$${estimatedCost.toFixed(5)}`);
                 return { success: true, content, usage, cost: estimatedCost };
             } else {
                 throw new Error('API返回格式异常');
             }
-
         } catch (error) {
             const errMsg = error instanceof Error ? error.message : '未知错误';
-            
-            // 🔧 处理429限流错误，设置冷却时间
             if (errMsg.includes('429')) {
-                this.retryAfter = Date.now() + 30000; // 冷却30秒
+                this.retryAfter = Date.now() + 30000;
                 console.warn('🚫 API限流(429)，冷却30秒后恢复');
                 return { success: false, error: '请求太频繁，请稍后再说话' };
             }
-            
             console.error('❌ AI请求失败:', errMsg);
             return { success: false, error: errMsg };
-        } finally {
-            this.isRequesting = false;
         }
     }
 
@@ -304,10 +357,12 @@ export class NPCAIAssistant {
 
     /**
      * NPC处理对话
+     * @param priority 'high'=玩家主动对话（插队），'low'=气泡/开场白/八卦（排队）
      */
     async handleConversation(
         systemPrompt: string,
-        playerMessage: string
+        playerMessage: string,
+        priority: 'high' | 'low' = 'low'
     ): Promise<string | null> {
         // 构建包含历史的消息
         const messages: AIMessage[] = [
@@ -318,8 +373,9 @@ export class NPCAIAssistant {
 
         const response = await this.client.chatCompletion(messages, {
             temperature: 0.7,
-            maxTokens: 400
-        });
+            maxTokens: 400,
+            _priority: priority,
+        } as any);
 
         if (response.success && response.content) {
             // 更新对话历史

@@ -87,7 +87,7 @@ export class NightPoliceNPC {
 
     private thoughtBubble!: ThoughtBubble;
     private lastThoughtTime = 0;
-    private readonly THOUGHT_INTERVAL = 18000; // 夜巡间隔稍长，显得沉稳
+    private readonly THOUGHT_INTERVAL = 40000; // 夜巡间隔40秒
     private handoffDone = false;
     private handoffPromptCache = '';
 
@@ -280,18 +280,36 @@ export class NightPoliceNPC {
 
         try {
             const systemPrompt = buildNPCPrompt(
-`你是老王（王大春），47岁，哑巴镇夜班社区民警。话少，东北口语，冷静克制。`,
+                this.buildPersonality(),
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
-            // 移除 [GREETING] 触发，不污染正式对话历史
+            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
             const hist = this.aiAssistant.getHistory();
             (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
             return response ?? this.getFallbackGreeting(hasHistory);
         } catch {
             return this.getFallbackGreeting(hasHistory);
         }
+    }
+
+    private buildPersonality(): string {
+        const gossip = GossipPool.getInstance().toPromptString();
+        const handoff = this.handoffPromptCache;
+        return `你是老王（王大春），47岁，哑巴镇夜班社区民警，从警22年。现在是夜班执勤，正在镇上巡逻。
+媳妇去城里帮闺女带娃了，你把铺盖搬进警务室，夜里随时出警。
+脸黑看着凶，实则心细，专挑犄角旮旯走，连公园树后藏的野猫都能瞅见。
+
+【说话规则——必须严格遵守】
+1. 每次回复最多2句话，不超过35个字，一句一行。
+2. 话比老刘少，更简，更冷，但不是冷漠，是专注。
+3. 东北口语，用：嗯、行、没事儿、瞅啥、整啥、知道了、盯着呢。
+4. 说话带夜班执勤感：夜里安静但不放松，随时在观察，偶尔提到"夜里""黑灯瞎火""犄角旮旯"。
+5. 对玩家叫"李家妹子"，语气简短但不失亲切。
+6. 遇到异常情况（如有人鬼鬼祟祟）反应敏锐，立刻追问细节。
+7. 老刘交班时说的情况你已知晓，可自然提及。
+
+【禁忌】不写长段，不抒情，不废话，不说镇子以外的地方。${handoff}${gossip}`;
     }
 
     private getFallbackGreeting(hasHistory: boolean): string {
@@ -305,32 +323,16 @@ export class NightPoliceNPC {
 
     async handleConversation(playerMessage: string): Promise<string> {
         try {
-            // ✅ 使用本地缓存的交接信息（而非每次重新读已清空的 Pool）
-            const handoffContext = this.handoffPromptCache;
-            const gossip = GossipPool.getInstance().toPromptString();
-
             const systemPrompt = buildNPCPrompt(
-`你是老王（王大春），47岁，哑巴镇夜班社区民警，从警22年。现在是夜班执勤，正在镇上巡逻。
-
-【核心气质】
-你是个话少、眼尖的夜班民警。不爱多说，但说出来都是干货。脸黑看着凶，实则心细，专挑犄角旮旯走，连公园树后藏的野猫都能瞅见。媳妇去城里帮闺女带娃了，你把铺盖搬进警务室，夜里随时出警。
-
-【说话规则——必须严格遵守】
-1. 每次回复最多2句话，不超过35个字，一句一行。
-2. 话比老刘少，更简，更冷，但不是冷漠，是专注。
-3. 东北口语，用：嗯、行、没事儿、瞅啥、整啥、知道了、盯着呢。
-4. 说话带夜班执勤感：夜里安静但不放松，随时在观察，偶尔提到"夜里""黑灯瞎火""犄角旮旯"。
-5. 对玩家叫"李家妹子"，语气简短但不失亲切。
-6. 遇到异常情况（如有人鬼鬼祟祟）反应敏锐，立刻追问细节。
-
-【禁忌】不写长段，不抒情，不废话，不说镇子以外的地方。` + handoffContext + gossip,
+                this.buildPersonality(),
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
 
             const response = await this.aiAssistant.handleConversation(
                 systemPrompt,
-                playerMessage
+                playerMessage,
+                'high'
             );
             const result = response ?? this.getFallbackResponse(playerMessage);
 
@@ -439,7 +441,10 @@ export class NightPoliceNPC {
         this.scheduleInvestigateThought(3000);
     }
 
-    /** 夜巡途中随机触发 LLM 内心独白 */
+    /**
+     * 夜巡时随机冒硬编码气泡（省 LLM）。
+     * 出警/调查期间的 LLM 气泡由 scheduleInvestigateThought 处理。
+     */
     private maybeShowRandomThought(): void {
         if (this.thoughtBubble.isShowing()) return;
         const now = Date.now();
@@ -447,41 +452,13 @@ export class NightPoliceNPC {
         if (Math.random() > 0.015) return;
 
         this.lastThoughtTime = now;
-        this.generatePatrolThought();
-    }
-
-    /**
-     * 调用 LLM 生成夜巡中的内心独白
-     * 与 aiAssistant 共享对话历史，生成后移除避免污染正式上下文
-     */
-    private async generatePatrolThought(): Promise<void> {
         const hour = this.timeManager.getHour();
-        let timeHint: string;
-        if (hour >= 22)             timeHint = '刚开始夜巡，夜深了';
-        else if (hour >= 2)         timeHint = '深夜巡逻，最安静的时候';
-        else if (hour >= 4)         timeHint = '凌晨，快天亮了';
-        else                        timeHint = '夜里巡逻中';
-
-        const systemPrompt = buildNPCPrompt(
-            `你是老王（王建军），55岁，哑巴镇夜班警察，话少，心细，夜里一个人巡逻。东北口音，沉稳不多话。`,
-            this.timeManager.getHour(),
-            this.timeManager.getMinute()
-        );
-        const trigger = `[THOUGHT] 现在${timeHint}，你正在镇上夜巡。根据你当前状态和你们聊过的内容，用第一人称说一句内心独白。要求：不超过12个字，东北口语，沉稳简短，不要任何格式。只输出那句话本身。`;
-
-        try {
-            const thought = await this.aiAssistant.handleConversation(systemPrompt, trigger);
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
-
-            if (thought && this.phase === 'on_duty') {
-                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
-                this.thoughtBubble.show(clean, 4000);
-            }
-        } catch {
-            const fallbacks = ['夜里挺安静', '黑灯瞎火的', '腿酸了，继续转'];
-            this.thoughtBubble.show(fallbacks[Math.floor(Math.random() * fallbacks.length)], 3500);
-        }
+        let pool: string[];
+        if (hour >= 22)      pool = ['夜深了，开始巡', '黑灯瞎火的', '这旮旯还算太平'];
+        else if (hour >= 2)  pool = ['最安静的时候', '深更半夜的', '睁眼听动静'];
+        else if (hour >= 4)  pool = ['快天亮了', '再转一圈', '今夜无事'];
+        else                  pool = ['夜里挺安静', '腿酸了，继续', '夜巡挺好'];
+        this.thoughtBubble.show(pool[Math.floor(Math.random() * pool.length)], 3500);
     }
 
     /** 出警途中循环生成 LLM 内心独白 */

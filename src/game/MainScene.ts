@@ -8,6 +8,7 @@ import { PoliceNPCIntegration } from '../agents/PoliceNPCIntegration';
 import { NightPoliceNPC } from '../agents/NightPoliceNPC';
 import { ZhangShenNPC } from '../agents/ZhangShenNPC';
 import { DaQiangNPC } from '../agents/DaQiangNPC';
+import { AIAPIClient } from '../utils/AIService';
 import { registerLPCAnims, playLPCAnim, velocityToDirection, getIdleFrame, LPCDirection } from './LPCSprite';
 
 export class MainScene extends Phaser.Scene {
@@ -1098,7 +1099,10 @@ export class MainScene extends Phaser.Scene {
     
     private startDialog(npcType: 'npc' | 'police' | 'wang' | 'zhang' | 'daqiang' = 'npc'): void {
         this.currentDialogNPC = npcType;
-        
+
+        // 🧊 冻结全局 AI：对话期间所有 NPC 后台 low 任务直接丢弃
+        AIAPIClient.getInstance().freeze();
+
         const px = this.player.x;
         const py = this.player.y;
 
@@ -1203,6 +1207,9 @@ export class MainScene extends Phaser.Scene {
             this.daQiang?.getNPC()?.restoreDirection();
         }
         this.currentDialogNPC = null;
+
+        // 🔥 解冻全局 AI：对话结束，后台任务恢复排队
+        AIAPIClient.getInstance().unfreeze();
     }
 
     /**

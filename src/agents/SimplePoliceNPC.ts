@@ -108,7 +108,7 @@ export class SimplePoliceNPC {
 
     private thoughtBubble!: ThoughtBubble;
     private lastThoughtTime = 0;
-    private readonly THOUGHT_INTERVAL = 18000;
+    private readonly THOUGHT_INTERVAL = 40000;
 
     // ── 出警子状态 ──────────────────────────────────────────────
     private investigateTarget: { x: number; y: number } | null = null;
@@ -269,51 +269,24 @@ export class SimplePoliceNPC {
         return ['转一圈', '没啥动静，好', '辖区太平'][Math.floor(Math.random() * 3)];
     }
 
-    /** 巡逻途中随机触发 LLM 内心独白（与对话历史共享上下文） */
+    /**
+     * 普通巡逻时随机冒硬编码气泡（省 LLM）。
+     * 出警相关的 LLM 气泡在 scheduleInvestigateThought / generateInvestigateThought 里处理。
+     */
     private maybeShowRandomThought(): void {
         if (this.thoughtBubble.isShowing()) return;
         const now = Date.now();
         if (now - this.lastThoughtTime < this.THOUGHT_INTERVAL) return;
-        if (Math.random() > 0.015) return; // 每帧 1.5% 概率，配合间隔控制频率
+        if (Math.random() > 0.015) return;
 
-        this.lastThoughtTime = now; // 先记录，防止并发重复触发
-        this.generatePatrolThought();
-    }
-
-    /**
-     * 调用 LLM 生成巡逻中的内心独白
-     * 与 aiAssistant 共享对话历史，生成后移除避免污染正式上下文
-     */
-    private async generatePatrolThought(): Promise<void> {
+        this.lastThoughtTime = now;
         const hour = this.timeManager.getHour();
-        let timeHint: string;
-        if (hour >= 10 && hour < 14)      timeHint = '上午巡逻中';
-        else if (hour >= 14 && hour < 18) timeHint = '下午巡逻中，有点乏';
-        else if (hour >= 18 && hour < 22) timeHint = '傍晚，快交班了';
-        else                               timeHint = '刚开始巡逻';
-
-        const systemPrompt = buildNPCPrompt(
-            `你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。东北口语，说话简短有执勤感。`,
-            this.timeManager.getHour(),
-            this.timeManager.getMinute()
-        );
-        const trigger = `[THOUGHT] 现在${timeHint}，你正在镇上走动。根据你巡逻的状态和你们聊过的内容，用第一人称说一句内心独白。要求：不超过12个字，东北口语，不要任何格式。只输出那句话本身。`;
-
-        try {
-            const thought = await this.aiAssistant.handleConversation(systemPrompt, trigger);
-            // 移除这两条，避免污染正式对话历史
-            const hist = this.aiAssistant.getHistory();
-            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
-
-            if (thought && this.phase === 'on_duty') {
-                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
-                this.showThought(clean, 4000);
-            }
-        } catch {
-            // fallback
-            const fallbacks = ['这条路走了二十年了', '腿有点酸了', '今儿没啥事儿挺好'];
-            this.showThought(fallbacks[Math.floor(Math.random() * fallbacks.length)], 3500);
-        }
+        let pool: string[];
+        if (hour >= 10 && hour < 14)      pool = ['上午挺安静', '二柱子别给我整幺蛾子', '转一圈儿再说'];
+        else if (hour >= 14 && hour < 18) pool = ['下午有点犯困', '辖区太平就好', '腿有点酸了'];
+        else if (hour >= 18 && hour < 22) pool = ['傍晚了，快交班', '今儿没啥事儿挺好', '镇上还算安稳'];
+        else                               pool = ['刚开始巡逻', '天儿挺好的', '先溜达一圈'];
+        this.showThought(pool[Math.floor(Math.random() * pool.length)], 3500);
     }
 
     // ── 上班：从出生地走进镇子 ────────────────────────────────
@@ -380,20 +353,34 @@ export class SimplePoliceNPC {
 
         try {
             const systemPrompt = buildNPCPrompt(
-`你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。东北口语，说话简短有执勤感。`,
+                this.buildPersonality(),
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
-            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger);
-            // 开场白不计入正式对话历史（避免污染上下文）
-            // 但 handleConversation 已经把它加进去了，所以手动移除最后两条
+            const response = await this.aiAssistant.handleConversation(systemPrompt, trigger, 'high');
             const hist = this.aiAssistant.getHistory();
-            // 移除刚才的 [GREETING] 触发 + 回复，保持历史干净
             (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
             return response ?? this.getFallbackGreeting(hasHistory);
         } catch {
             return this.getFallbackGreeting(hasHistory);
         }
+    }
+
+    private buildPersonality(): string {
+        const gossip = GossipPool.getInstance().toPromptString();
+        return `你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年，土生土长的哑巴镇人。
+媳妇在镇东头开小卖部，女儿在城里读大学。每天6点上班，18点和老王交班。
+正在镇上巡逻执勤，眼睛盯着镇上动静，脑子想着辖区安全，顺带跟街坊搭句话。
+
+【说话规则——必须严格遵守】
+1. 每次回复最多3句话，不超过50个字，一句一行。
+2. 东北口语，多用：咋、整、嗯哪、贼、那旮旯、行了行了、咋整、没事儿。
+3. 说话带"执勤感"：提到巡逻、查看、辖区、治安，偶尔冒出"情况属实""已掌握"，紧接大白话。
+4. 对玩家叫"李家妹子"，像长辈但也像值班的人。
+5. 媳妇和女儿偶尔提一句，显得是活生生的人，不是机器。
+6. 遇到问题先问"咋回事儿"，再给建议，不废话。
+
+【禁忌】不写长段，不写文章，不说镇子以外的地方。${gossip}`;
     }
 
     private getFallbackGreeting(hasHistory: boolean): string {
@@ -407,29 +394,16 @@ export class SimplePoliceNPC {
 
     async handleConversation(playerMessage: string): Promise<string> {
         try {
-            const gossip = GossipPool.getInstance().toPromptString();
             const systemPrompt = buildNPCPrompt(
-`你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。现在正在镇上巡逻执勤。
-
-【核心气质】
-你是个在岗的民警，不是在家唠嗑的邻居。说话要让人感觉你随时在"管事儿"——眼睛盯着镇上动静，脑子想着辖区安全，顺带跟街坊搭句话。热心但有分寸，亲切但不散漫。
-
-【说话规则——必须严格遵守】
-1. 每次回复最多3句话，不超过50个字，一句一行。
-2. 东北口语，多用：咋、整、嗯哪、贼、那旮旯、行了行了、咋整、没事儿。
-3. 说话带"执勤感"：提到巡逻、查看、辖区、治安，偶尔冒出"情况属实""已掌握"，紧接大白话。
-4. 对玩家叫"李家妹子"，像长辈但也像值班的人。
-5. 遇到问题先问"咋回事儿"，再给建议。
-6. 不废话，说完就完，不总结，不抒情。
-
-【禁忌】不写长段，不写文章，不说镇子以外的地方。` + gossip,
+                this.buildPersonality(),
                 this.timeManager.getHour(),
                 this.timeManager.getMinute()
             );
 
             const response = await this.aiAssistant.handleConversation(
                 systemPrompt,
-                playerMessage
+                playerMessage,
+                'high'
             );
             const result = response ?? this.getFallbackResponse(playerMessage);
 
