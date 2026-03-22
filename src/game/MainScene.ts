@@ -1245,7 +1245,10 @@ export class MainScene extends Phaser.Scene {
             // 与老王对话
             this.addChatMessage('民警老王', '（思考中...）');
             try {
+                const t0 = Date.now();
+                console.log(`⏱️ [老王] 开始请求 t=0ms`);
                 const response = await this.nightPolice.handleConversation(message);
+                console.log(`⏱️ [老王] 收到回复 t=${Date.now() - t0}ms，内容: "${response?.slice(0,30)}"`);
                 this.replaceLastMessage('民警老王', response);
             } catch (error) {
                 console.error('老王AI对话失败:', error);

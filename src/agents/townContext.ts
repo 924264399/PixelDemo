@@ -31,7 +31,7 @@ export function buildNPCPrompt(npcPersonality: string, gameHour?: number, gameMi
     if (gameHour !== undefined && gameMinute !== undefined) {
         const hh = gameHour.toString().padStart(2, '0');
         const mm = gameMinute.toString().padStart(2, '0');
-        timeInfo = `\n\n【当前游戏时间】\n现在是 ${hh}:${mm}，请根据这个时间来判断是白天还是夜晚、你应该在做什么、以及跟玩家说话时的语气和内容。`;
+        timeInfo = `\n时间:${hh}:${mm}`;
     }
-    return `${TOWN_CONTEXT}\n\n【你的身份与人设】\n${npcPersonality}${timeInfo}`;
+    return `${TOWN_CONTEXT}\n${npcPersonality}${timeInfo}`;
 }

@@ -96,9 +96,9 @@ export class AIAPIClient {
     private constructor() {
         // 从环境变量加载配置（支持浏览器环境）
         this.config = {
-            endpoint: this.getEnvVar('AI_API_ENDPOINT') || 'https://api.qnaigc.com/v1/chat/completions',
-            apiKey: this.getEnvVar('AI_API_KEY') || '',
-            model: this.getEnvVar('AI_MODEL') || 'gpt-oss-20b',
+            endpoint: this.getEnvVar('AI_API_ENDPOINT') || 'https://api.xiaomimimo.com/v1/chat/completions',
+            apiKey: this.getEnvVar('AI_API_KEY') || 'sk-chlz73wt3dalkkp2eh7rylsdujk1vw14io4h8nu6cghphs9l',
+            model: this.getEnvVar('AI_MODEL') || 'mimo-v2-omni',
             temperature: 0.8,
             maxTokens: 300,  // 给回复足够空间，避免 length 截断
             timeout: 20000   // 超时20s，给网络足够余量
@@ -202,9 +202,13 @@ export class AIAPIClient {
             this.currentTaskPriority = null;
             this.currentRequestController = null;
             // low 任务之间保留 500ms 间隔，防止频繁触发；high 任务无间隔
+            // 若下一个是 high 任务，跳过等待立刻执行
             if (priority === 'low') {
-                const gap = 500 - (Date.now() - this.lastRequestTime);
-                if (gap > 0) await this.sleep(gap);
+                const nextIsHigh = this.requestQueue[0]?.priority === 'high';
+                if (!nextIsHigh) {
+                    const gap = 500 - (Date.now() - this.lastRequestTime);
+                    if (gap > 0) await this.sleep(gap);
+                }
             }
         }
 
@@ -227,8 +231,10 @@ export class AIAPIClient {
 
             console.log(`🤖 AI请求 #${++this.requestCount} (messages: ${messages.length})`);
             this.lastRequestTime = Date.now();
+            const _reqStart = Date.now();
 
             const response = await this.makeRequest(requestData);
+            console.log(`⏱️ makeRequest 耗时: ${Date.now() - _reqStart}ms`);
 
             if (response.choices && response.choices[0]) {
                 const finishReason = response.choices[0].finish_reason;
@@ -407,7 +413,7 @@ export class NPCAIAssistant {
 
         const response = await this.client.chatCompletion(messages, {
             temperature: 0.7,
-            maxTokens: 400,
+            maxTokens: 150,
             _priority: priority,
         } as any);
 
