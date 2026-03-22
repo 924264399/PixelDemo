@@ -88,8 +88,11 @@ export function playLPCAnim(
   dir: LPCDirection,
 ): void {
   const animKey = `${key}-${animName}-${dir}`;
-  if (sprite.anims.currentAnim?.key !== animKey) {
-    sprite.play(animKey, true);
+  // 两个条件任一满足才调用 play：
+  //   1. 当前播的动画 key 不同（切换方向/动画）
+  //   2. 动画已停止（stop() 后 key 还在，但 isPlaying = false）
+  if (sprite.anims.currentAnim?.key !== animKey || !sprite.anims.isPlaying) {
+    sprite.play(animKey, true);   // ignoreIfPlaying=true：正在播同一个就不重置
   }
 }
 
