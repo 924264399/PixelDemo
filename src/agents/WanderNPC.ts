@@ -12,13 +12,13 @@ import { TimeManager } from '../game/TimeManager';
 import { registerLPCAnims } from '../game/LPCSprite';
 import { ThoughtBubble } from '../game/ThoughtBubble';
 
-// 流浪汉的游荡路点：公园中心为主，偶尔踱步到两个门口
-// 权重：中心出现4次，北门1次，南门1次 → 大部分时间待在中心
+// 流浪汉的游荡路点：公园东侧角落为主，偶尔溜达到两个门口
+// 权重：主位置4次，北门1次，南门1次
 const WANDER_WAYPOINTS = [
-    { x: 1481, y: 1601 },  // 公园核心 ×4（权重高）
-    { x: 1481, y: 1601 },
-    { x: 1481, y: 1601 },
-    { x: 1481, y: 1601 },
+    { x: 1766, y: 1466 },  // 主位置（公园东侧角落）×4
+    { x: 1766, y: 1466 },
+    { x: 1766, y: 1466 },
+    { x: 1766, y: 1466 },
     { x: 1601, y: 1103 },  // 公园北门
     { x: 1142, y: 1610 },  // 公园南门
 ];
