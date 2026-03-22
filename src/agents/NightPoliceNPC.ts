@@ -86,6 +86,8 @@ export class NightPoliceNPC {
     private readonly PATROL_INTERVAL = 10000;
 
     private thoughtBubble!: ThoughtBubble;
+    private lastThoughtTime = 0;
+    private readonly THOUGHT_INTERVAL = 18000; // 夜巡间隔稍长，显得沉稳
     private handoffDone = false;
     private handoffPromptCache = '';
 
@@ -180,6 +182,7 @@ export class NightPoliceNPC {
                 } else {
                     this.advanceQueue();
                 }
+                this.maybeShowRandomThought();
                 break;
 
             case 'investigating':
@@ -434,6 +437,51 @@ export class NightPoliceNPC {
         this.advanceQueue();
 
         this.scheduleInvestigateThought(3000);
+    }
+
+    /** 夜巡途中随机触发 LLM 内心独白 */
+    private maybeShowRandomThought(): void {
+        if (this.thoughtBubble.isShowing()) return;
+        const now = Date.now();
+        if (now - this.lastThoughtTime < this.THOUGHT_INTERVAL) return;
+        if (Math.random() > 0.015) return;
+
+        this.lastThoughtTime = now;
+        this.generatePatrolThought();
+    }
+
+    /**
+     * 调用 LLM 生成夜巡中的内心独白
+     * 与 aiAssistant 共享对话历史，生成后移除避免污染正式上下文
+     */
+    private async generatePatrolThought(): Promise<void> {
+        const hour = this.timeManager.getHour();
+        let timeHint: string;
+        if (hour >= 22)             timeHint = '刚开始夜巡，夜深了';
+        else if (hour >= 2)         timeHint = '深夜巡逻，最安静的时候';
+        else if (hour >= 4)         timeHint = '凌晨，快天亮了';
+        else                        timeHint = '夜里巡逻中';
+
+        const systemPrompt = buildNPCPrompt(
+            `你是老王（王建军），55岁，哑巴镇夜班警察，话少，心细，夜里一个人巡逻。东北口音，沉稳不多话。`,
+            this.timeManager.getHour(),
+            this.timeManager.getMinute()
+        );
+        const trigger = `[THOUGHT] 现在${timeHint}，你正在镇上夜巡。根据你当前状态和你们聊过的内容，用第一人称说一句内心独白。要求：不超过12个字，东北口语，沉稳简短，不要任何格式。只输出那句话本身。`;
+
+        try {
+            const thought = await this.aiAssistant.handleConversation(systemPrompt, trigger);
+            const hist = this.aiAssistant.getHistory();
+            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+
+            if (thought && this.phase === 'on_duty') {
+                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
+                this.thoughtBubble.show(clean, 4000);
+            }
+        } catch {
+            const fallbacks = ['夜里挺安静', '黑灯瞎火的', '腿酸了，继续转'];
+            this.thoughtBubble.show(fallbacks[Math.floor(Math.random() * fallbacks.length)], 3500);
+        }
     }
 
     /** 出警途中循环生成 LLM 内心独白 */

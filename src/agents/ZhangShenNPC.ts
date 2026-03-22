@@ -10,6 +10,7 @@ import { buildNPCPrompt } from './townContext';
 import { TimeManager } from '../game/TimeManager';
 import { registerLPCAnims } from '../game/LPCSprite';
 import { GossipPool } from './GossipPool';
+import { ThoughtBubble } from '../game/ThoughtBubble';
 
 // 便利店内张婶的活动区域路点
 // 工位标准坐标 (1688, 620)，在其周围小范围溜达
@@ -35,6 +36,11 @@ export class ZhangShenNPC {
     private wanderTimer = 0;
     private readonly WANDER_INTERVAL = 4000; // 每4秒走到下一个路点
 
+    // 气泡系统
+    private thoughtBubble!: ThoughtBubble;
+    private lastThoughtTime = 0;
+    private readonly THOUGHT_INTERVAL = 15000; // 最少15秒冒一次
+
     constructor(scene: Phaser.Scene, timeManager: TimeManager) {
         this.scene = scene;
         this.timeManager = timeManager;
@@ -58,6 +64,9 @@ export class ZhangShenNPC {
 
         // ── AI 助手 ──
         this.aiAssistant = new NPCAIAssistant('npc_zhangshen');
+
+        // ── 气泡 ──
+        this.thoughtBubble = new ThoughtBubble(scene, this.npc);
     }
 
     // ── 公共接口 ──
@@ -66,9 +75,12 @@ export class ZhangShenNPC {
         return this.npc;
     }
 
-    // ── 每帧更新：店内溜达 ──
+    // ── 每帧更新：店内溜达 + 气泡 ──
     update(delta: number = 16): void {
-        if (this.isDialogMode) return; // 对话中站定不动
+        // 气泡始终跟随（对话中也要 update 保持位置）
+        this.thoughtBubble.update();
+
+        if (this.isDialogMode) return; // 对话中站定不动，不走路点
 
         // 更新深度（Y轴排序，和玩家/老刘老王一致）
         this.npc.setDepth(BASE_DEPTH + Math.floor(this.npc.y));
@@ -81,6 +93,9 @@ export class ZhangShenNPC {
             const next = STORE_WAYPOINTS[this.waypointIndex];
             this.npc.setTarget(next.x, next.y);
         }
+
+        // 随机冒内心独白
+        this.maybeShowRandomThought();
     }
 
     pausePatrol(): void {
@@ -90,6 +105,63 @@ export class ZhangShenNPC {
 
     resumePatrol(): void {
         this.isDialogMode = false;
+    }
+
+    // ── 内心独白 ──────────────────────────────────────────────
+
+    private showThought(text: string, duration = 4000): void {
+        this.thoughtBubble.show(text, duration);
+    }
+
+    /** 店内闲逛时随机触发 LLM 内心独白（与对话历史共享上下文） */
+    private maybeShowRandomThought(): void {
+        if (this.thoughtBubble.isShowing()) return;
+        const now = Date.now();
+        if (now - this.lastThoughtTime < this.THOUGHT_INTERVAL) return;
+        if (Math.random() > 0.012) return; // 每帧约1.2%概率，配合间隔控制频率
+
+        this.lastThoughtTime = now; // 先记录时间，防止并发重复触发
+        this.generateAndShowThought();
+    }
+
+    /**
+     * 调用 LLM 生成一句内心独白并显示在气泡里
+     * 用 [THOUGHT] 标签触发，共享 aiAssistant 对话历史（含玩家聊天上下文）
+     * 生成后移除这两条记录，避免污染正式对话历史
+     */
+    private async generateAndShowThought(): Promise<void> {
+        const hour = this.timeManager.getHour();
+        let timeHint: string;
+        if (hour >= 6 && hour < 10)       timeHint = '早上刚开门，进货忙碌';
+        else if (hour >= 10 && hour < 14) timeHint = '上午，客人陆续来';
+        else if (hour >= 14 && hour < 18) timeHint = '下午，店里比较清闲';
+        else if (hour >= 18 && hour < 22) timeHint = '傍晚，晚高峰客人多';
+        else                               timeHint = '夜里，快关门了';
+
+        const systemPrompt = buildNPCPrompt(
+            this.buildPersonality(),
+            this.timeManager.getHour(),
+            this.timeManager.getMinute()
+        );
+
+        const trigger = `[THOUGHT] 现在是${timeHint}。根据你当前的状态和你们聊过的内容，用第一人称说一句内心碎碎念。要求：不超过15个字，东北口语，自然随意，不要任何标点之外的格式。只输出那句话本身。`;
+
+        try {
+            const thought = await this.aiAssistant.handleConversation(systemPrompt, trigger);
+
+            // 生成后移除这两条（[THOUGHT]触发 + 回复），避免污染正式对话历史
+            const hist = this.aiAssistant.getHistory();
+            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+
+            if (thought) {
+                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
+                this.showThought(clean, 4000);
+            }
+        } catch {
+            // LLM 失败时 fallback 到硬编码
+            const fallbacks = ['哎哟，这啥情况', '得，先整理货', '唠嗑唠累了'];
+            this.showThought(fallbacks[Math.floor(Math.random() * fallbacks.length)], 3000);
+        }
     }
 
     /**

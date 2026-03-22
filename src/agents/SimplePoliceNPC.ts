@@ -269,25 +269,51 @@ export class SimplePoliceNPC {
         return ['转一圈', '没啥动静，好', '辖区太平'][Math.floor(Math.random() * 3)];
     }
 
-    /** 巡逻途中随机冒出的独白（低概率，避免刷屏） */
+    /** 巡逻途中随机触发 LLM 内心独白（与对话历史共享上下文） */
     private maybeShowRandomThought(): void {
         if (this.thoughtBubble.isShowing()) return;
         const now = Date.now();
         if (now - this.lastThoughtTime < this.THOUGHT_INTERVAL) return;
         if (Math.random() > 0.015) return; // 每帧 1.5% 概率，配合间隔控制频率
 
-        const thoughts = [
-            '媳妇今天卖了多少',
-            '女儿最近咋样了',
-            '二柱子别给我回来',
-            '这条路走了二十年了',
-            '快到饭点了...',
-            '天有点凉了',
-            '今儿没啥事儿挺好',
-            '腿有点酸了',
-        ];
-        this.showThought(thoughts[Math.floor(Math.random() * thoughts.length)]);
-        this.lastThoughtTime = now;
+        this.lastThoughtTime = now; // 先记录，防止并发重复触发
+        this.generatePatrolThought();
+    }
+
+    /**
+     * 调用 LLM 生成巡逻中的内心独白
+     * 与 aiAssistant 共享对话历史，生成后移除避免污染正式上下文
+     */
+    private async generatePatrolThought(): Promise<void> {
+        const hour = this.timeManager.getHour();
+        let timeHint: string;
+        if (hour >= 10 && hour < 14)      timeHint = '上午巡逻中';
+        else if (hour >= 14 && hour < 18) timeHint = '下午巡逻中，有点乏';
+        else if (hour >= 18 && hour < 22) timeHint = '傍晚，快交班了';
+        else                               timeHint = '刚开始巡逻';
+
+        const systemPrompt = buildNPCPrompt(
+            `你是老刘（刘建国），48岁，哑巴镇白班社区民警，从警23年。东北口语，说话简短有执勤感。`,
+            this.timeManager.getHour(),
+            this.timeManager.getMinute()
+        );
+        const trigger = `[THOUGHT] 现在${timeHint}，你正在镇上走动。根据你巡逻的状态和你们聊过的内容，用第一人称说一句内心独白。要求：不超过12个字，东北口语，不要任何格式。只输出那句话本身。`;
+
+        try {
+            const thought = await this.aiAssistant.handleConversation(systemPrompt, trigger);
+            // 移除这两条，避免污染正式对话历史
+            const hist = this.aiAssistant.getHistory();
+            (this.aiAssistant as any).conversationHistory = hist.slice(0, -2);
+
+            if (thought && this.phase === 'on_duty') {
+                const clean = thought.replace(/^["「『]|["」』]$/g, '').trim();
+                this.showThought(clean, 4000);
+            }
+        } catch {
+            // fallback
+            const fallbacks = ['这条路走了二十年了', '腿有点酸了', '今儿没啥事儿挺好'];
+            this.showThought(fallbacks[Math.floor(Math.random() * fallbacks.length)], 3500);
+        }
     }
 
     // ── 上班：从出生地走进镇子 ────────────────────────────────
